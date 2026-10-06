@@ -119,3 +119,7 @@ explicitly asked to "update PROCESS.md" or "draft PROCESS.md from the log" —
 then pull entries tagged `[harness]`, `[discarded]`, `[judgement]` first,
 follow the repo's PROCESS.md template, and verify every citation resolves
 (`pnpm check:evidence`) before finishing.
+
+A commit that only adds `process-log.md` entries needs no entry of its own —
+otherwise every log-commit would need a log-commit needing a log-commit,
+forever.
