@@ -114,3 +114,51 @@ path and hasn't happened yet.
 `pnpm-workspace.yaml`, `tsconfig.json`).
 
 **Curated prompt:** "Then do Step 2 and stop."
+
+## 2026-10-07 — [routine] (no commit)
+
+**What happened:** The previous entry flagged that `e73f336`'s Dockerfile had
+never actually been built by a container runtime — this sandbox has none.
+The human closed that gap by deploying with `flyctl` (a remote build on Fly's
+builders): the image built at 91 MB and started, and against the live app
+`APP_URL=https://comp4020-final-gera1t-2001.fly.dev pnpm check` is green
+(2/2: answers at `/`, publishes `README.md` at `/readme/`).
+
+**What I did instead of the obvious thing:** Nothing to redo — recording this
+closes the verification gap rather than leaving it open. Noted for later: CI
+does not run while the repo is private (`checks.yml`'s job condition), so
+until `/ship` flips it public, a Fly remote-build deploy is the real image
+check, not CI.
+
+**How I knew it was right:** The human read the live result directly (build
+output, live `pnpm check` run) — no further check needed here.
+
+**Citation:** none (no commit — a deploy, not a repo change).
+
+**Curated prompt:** "I deployed with flyctl (remote build on Fly): the image
+built (91 MB) and started. Against the live app, APP_URL=... pnpm check is
+green: 2/2 ... Note: CI does not run while the repo is private, so this Fly
+remote build is the real image check for now."
+
+## 2026-10-07 — [routine]
+
+**What happened:** C8 Step 3 asked for the three-table schema (`users`,
+`security_questions`, `sessions`) as a migration that runs on boot, with the
+generated SQL shown for the human to read before continuing.
+
+**What I did instead of the obvious thing:** Since ADR 0001 ruled out an ORM,
+migrations are a plain numbered `.sql` file plus a tiny runner in `src/db.ts`
+that tracks applied names in a `schema_migrations` table and runs unapplied
+ones in a transaction — the approach the ADR itself named as a consequence of
+the Hono/no-ORM choice, implemented now rather than deferred.
+
+**How I knew it was right:** `pnpm typecheck` clean; booted the app twice
+against the same db file and confirmed the second boot applies nothing
+(idempotent); queried `sqlite_master` on a fresh boot and confirmed the
+stored `CREATE TABLE` statements match `migrations/0001_init.sql` exactly;
+`APP_URL=... pnpm check` still green (2/2) with the schema applied.
+
+**Citation:** `4433f7e` (`migrations/0001_init.sql`, `src/db.ts`,
+`Dockerfile`).
+
+**Curated prompt:** "Then do Step 3 and stop."
