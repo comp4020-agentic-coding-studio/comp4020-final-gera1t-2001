@@ -23,3 +23,22 @@ already implied by code already in the tree.
 **Curated prompt:** "Read CLAUDE.md and docs/c8-brief.md, then do Step 0 only
 and stop." / "Deployed the placeholder; / returns 200. Go on to Step 1 and
 stop after it."
+
+## 2026-10-07 — [judgement]
+
+**What happened:** The human decided ADR 0001's stack: Hono + better-sqlite3
+with hand-written SQL, over the course-default Astro+Drizzle stack already
+proven in crit 7.
+
+**What I did instead of the obvious thing:** Transcribed the human's decision
+and consequences verbatim into `docs/adr/0001-stack.md` without editing or
+paraphrasing — CLAUDE.md/the brief reserve the Decision section for the
+human, so the agent's role here is recording, not drafting.
+
+**How I knew it was right:** Confirmed the pasted text matched the Decision/
+Consequences slots in the ADR exactly before committing; no code was touched.
+
+**Citation:** `91653c6` (`docs/adr/0001-stack.md`).
+
+**Curated prompt:** pasted ADR Decision and Consequences text, to be recorded
+as-is.
