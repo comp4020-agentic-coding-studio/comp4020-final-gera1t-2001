@@ -381,3 +381,43 @@ separate from the deliverable, not committed).
 **Curated prompt:** "Open the built app (served over HTTP) at 1920×1080 and
 390×844; do a Tab-key pass through register → profile. Report what you saw
 and anything you did not check."
+
+## 2026-10-07 — [harness]
+
+**What happened:** Fixed the mobile overflow step 6 found: a `<select>`
+sizes to its longest `<option>` by default, and the security-question
+catalog's longest entry pushed `/register`'s whole layout viewport past
+390px on a 390px screen.
+
+**What I did instead of the obvious thing:** Added exactly one CSS rule
+(`max-width: 100%; box-sizing: border-box` on all form controls, plus
+`text-overflow: ellipsis` on `select`) to the shared `page()` shell in
+`src/html.ts` — the app's first and only CSS — rather than touching the
+`<select>` markup itself or adding a stylesheet file; the bug was generic to
+any wide form control, not specific to this one `<select>`, so the fix is
+too.
+
+**How I knew it was right:** Re-ran the exact same CDP measurement method
+from the step 6 log entry, before and after, by `git stash`-ing the fix to
+get a clean baseline and popping it back for the fixed numbers (at 390×844):
+
+| page                          | before (innerWidth/scrollWidth) | after    |
+|-------------------------------|----------------------------------|----------|
+| `/register`                   | 487 / 487                        | 390 / 390 |
+| `/forgot-password` reset form | 390 / 390 (already fine)         | 390 / 390 |
+| `/profile`                    | 390 / 390 (already fine)         | 390 / 390 |
+
+A screenshot with the longest question selected shows it truncated with a
+visible ellipsis ("What was the name of the street you lived on whe…"),
+satisfying "readable (wrap or truncate visibly)" rather than silently
+clipping. `pnpm typecheck` clean; `APP_URL=... pnpm check` still green
+(15/15) — the fix is pure CSS, nothing it could break functionally.
+
+**Citation:** `04fe4a0` (`src/html.ts`).
+
+**Curated prompt:** "Fix the mobile overflow you found: constrain form
+controls so nothing is wider than the viewport (a minimal CSS rule; no
+redesign, no framework). Then re-measure with the same CDP method: at
+390×844, scrollWidth must equal 390 on /register, /profile and
+/reset-password, and the long question text must still be readable (wrap or
+truncate visibly). Show the before/after numbers, commit, log it, and stop."
