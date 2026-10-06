@@ -82,3 +82,35 @@ separate log-only commits.
 
 **Curated prompt:** "Also add to CLAUDE.md: a commit that only adds
 process-log entries needs no entry of its own."
+
+## 2026-10-07 — [judgement]
+
+**What happened:** C8 Step 2 asked for the chosen stack (Hono +
+better-sqlite3, ADR 0001) scaffolded, serving `/` and a server-rendered
+`/readme/`, with the SQLite file under `/data` in production.
+
+**What I did instead of the obvious thing:** The brief only asked for
+`/readme/` to render README.md; I added a narrowly scoped `/readme/:asset`
+route (image extensions only, resolved path checked to stay under the repo
+root) because the brief separately requires "relative image links in the
+README must resolve at /readme/ too" — without it, an image link would 404
+the moment the README gained one, even though no image exists yet to prove
+it against.
+
+**How I knew it was right:** `pnpm typecheck` clean; ran the server locally
+and curled `/` and `/readme/` (both 200, headings present); ran
+`pnpm install --prod --frozen-lockfile` into a clean `node_modules` and
+confirmed the server still starts and answers on production-only
+dependencies; then ran `APP_URL=... pnpm check` both with the server down
+(red: "nothing is answering") and with it up (green, 2/2), so the check is
+shown to respond to the actual state, not just rubber-stamp green.
+**Not verified:** an actual `docker build`/`docker run` of the Dockerfile —
+this sandbox has no container runtime (docker, podman, nerdctl all absent).
+CI will build and run the real image on the next push; that run (or a local
+`docker build` on a machine that has Docker) is the real proof of the deploy
+path and hasn't happened yet.
+
+**Citation:** `e73f336` (`Dockerfile`, `src/server.ts`, `src/db.ts`,
+`pnpm-workspace.yaml`, `tsconfig.json`).
+
+**Curated prompt:** "Then do Step 2 and stop."
