@@ -101,8 +101,18 @@ Node 22) for storage.
 
 ## Decision
 
-<!-- the human fills this in -->
+Hono + better-sqlite3, with hand-written SQL.
+
+I chose it for two reasons. It prepares for week 10, when the app has to be
+real-time: Hono can serve server-sent events directly, without a framework in
+between. And the SQL stays visible: I can read every query the app runs,
+instead of having an ORM hide it.
 
 ## Consequences
 
-<!-- the human fills this in -->
+- I give up the stack I already deployed in crit 7, so tonight carries more
+  unknowns than reusing Astro would.
+- With no ORM, migrations are plain numbered SQL files that run on boot, and
+  I have to keep them in order myself.
+- Hono does less for me than Astro: forms, cookies and HTML escaping are code
+  I write and have to check.
