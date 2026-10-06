@@ -13,6 +13,7 @@ COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
 RUN pnpm install --prod --frozen-lockfile
 
 COPY src ./src
+COPY migrations ./migrations
 COPY README.md ./README.md
 
 ENV NODE_ENV=production
