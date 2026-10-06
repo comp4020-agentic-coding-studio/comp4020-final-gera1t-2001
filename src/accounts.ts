@@ -17,7 +17,7 @@ export interface User {
 
 export interface SecurityQuestion {
   position: number;
-  question: string;
+  question_key: string;
   answer_hash: string;
 }
 
@@ -45,7 +45,7 @@ export function createUser(
   passwordHash: string,
   displayName: string,
   bio: string,
-  questions: { question: string; answerHash: string }[],
+  questions: { questionKey: string; answerHash: string }[],
 ): number {
   return db.transaction(() => {
     const { lastInsertRowid } = db
@@ -55,9 +55,9 @@ export function createUser(
       .run(username, passwordHash, displayName, bio);
     const userId = Number(lastInsertRowid);
     const insertQuestion = db.prepare(
-      "INSERT INTO security_questions (user_id, position, question, answer_hash) VALUES (?, ?, ?, ?)",
+      "INSERT INTO security_questions (user_id, position, question_key, answer_hash) VALUES (?, ?, ?, ?)",
     );
-    questions.forEach((q, i) => insertQuestion.run(userId, i + 1, q.question, q.answerHash));
+    questions.forEach((q, i) => insertQuestion.run(userId, i + 1, q.questionKey, q.answerHash));
     return userId;
   })();
 }
@@ -65,7 +65,7 @@ export function createUser(
 export function getSecurityQuestions(userId: number): SecurityQuestion[] {
   return db
     .prepare(
-      "SELECT position, question, answer_hash FROM security_questions WHERE user_id = ? ORDER BY position ASC",
+      "SELECT position, question_key, answer_hash FROM security_questions WHERE user_id = ? ORDER BY position ASC",
     )
     .all(userId) as SecurityQuestion[];
 }

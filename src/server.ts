@@ -21,6 +21,12 @@ import {
 import type { User } from "./accounts.ts";
 import { hashSecret, spendDummyVerify, verifySecret } from "./crypto.ts";
 import { errorList, escapeHtml, page } from "./html.ts";
+import {
+  SECURITY_QUESTIONS,
+  isValidQuestionKey,
+  placeholderQuestionsForUsername,
+  questionTextForKey,
+} from "./security-questions.ts";
 import { createSession, deleteSession, userForSessionToken } from "./sessions.ts";
 
 // Opening the database here (src/db.ts) is what step 2/3 needed to show: the
@@ -32,10 +38,23 @@ const projectRoot = resolve(import.meta.dirname, "..");
 const USERNAME_RE = /^[a-z0-9_]{3,20}$/;
 const DISPLAY_NAME_MAX = 40;
 const BIO_MAX = 160;
-// Not named in the brief's Limits list (username/display name/bio only) —
-// added as a baseline so registration can't create a one-character password.
 const PASSWORD_MIN = 8;
+const PASSWORD_RULE_HINT = `At least ${PASSWORD_MIN} characters, including an uppercase letter, a lowercase letter, a digit, and a punctuation mark.`;
 const SESSION_COOKIE = "session";
+
+// One message per missing part, so the error says exactly what's missing
+// rather than a single pass/fail verdict.
+function passwordErrors(password: string): string[] {
+  const errors: string[] = [];
+  if (password.length < PASSWORD_MIN) {
+    errors.push(`Password must be at least ${PASSWORD_MIN} characters.`);
+  }
+  if (!/[a-z]/.test(password)) errors.push("Password must include a lowercase letter.");
+  if (!/[A-Z]/.test(password)) errors.push("Password must include an uppercase letter.");
+  if (!/[0-9]/.test(password)) errors.push("Password must include a digit.");
+  if (!/[^A-Za-z0-9]/.test(password)) errors.push("Password must include a punctuation mark.");
+  return errors;
+}
 
 function currentUser(c: Context): User | undefined {
   const token = getCookie(c, SESSION_COOKIE);
@@ -125,13 +144,18 @@ app.get("/readme/:asset{.+}", (c) => {
 
 function registerForm(errors: string[], values: Record<string, string>): string {
   const v = (k: string): string => escapeHtml(values[k] ?? "");
+  const questionOptions = (selected: string): string =>
+    `<option value="" disabled${selected ? "" : " selected"}>Choose a question</option>` +
+    SECURITY_QUESTIONS.map(
+      (q) =>
+        `<option value="${escapeHtml(q.key)}"${q.key === selected ? " selected" : ""}>${escapeHtml(q.text)}</option>`,
+    ).join("");
   const questionInputs = Array.from({ length: RECOVERY_QUESTION_COUNT }, (_, i) => {
     const n = i + 1;
     return `
       <p>
         <label for="question_${n}">Security question ${n}</label><br />
-        <input id="question_${n}" name="question_${n}" type="text" maxlength="200" required
-          value="${v(`question_${n}`)}" />
+        <select id="question_${n}" name="question_${n}" required>${questionOptions(values[`question_${n}`] ?? "")}</select>
       </p>
       <p>
         <label for="answer_${n}">Answer ${n}</label><br />
@@ -149,9 +173,10 @@ function registerForm(errors: string[], values: Record<string, string>): string 
           autocomplete="username" value="${v("username")}" />
       </p>
       <p>
-        <label for="password">Password (at least ${PASSWORD_MIN} characters)</label><br />
+        <label for="password">Password</label><br />
         <input id="password" name="password" type="password" required minlength="${PASSWORD_MIN}"
-          autocomplete="new-password" />
+          autocomplete="new-password" aria-describedby="password-rule" /><br />
+        <small id="password-rule">${escapeHtml(PASSWORD_RULE_HINT)}</small>
       </p>
       <p>
         <label for="display_name">Display name (optional — defaults to your username)</label><br />
@@ -163,6 +188,7 @@ function registerForm(errors: string[], values: Record<string, string>): string 
         <textarea id="bio" name="bio" maxlength="${BIO_MAX}">${v("bio")}</textarea>
       </p>
       ${questionInputs}
+      <p>Choose two different questions.</p>
       <p><button type="submit">Register</button></p>
     </form>`;
 }
@@ -181,7 +207,7 @@ app.post("/register", async (c) => {
   const displayNameInput = str("display_name").trim();
   const bio = str("bio").trim();
   const questions = Array.from({ length: RECOVERY_QUESTION_COUNT }, (_, i) => ({
-    question: str(`question_${i + 1}`).trim(),
+    questionKey: str(`question_${i + 1}`).trim(),
     answer: str(`answer_${i + 1}`).trim(),
   }));
 
@@ -191,9 +217,7 @@ app.post("/register", async (c) => {
   } else if (findUserByUsername(username)) {
     errors.push("That username is already taken.");
   }
-  if (password.length < PASSWORD_MIN) {
-    errors.push(`Password must be at least ${PASSWORD_MIN} characters.`);
-  }
+  errors.push(...passwordErrors(password));
   if (displayNameInput.length > DISPLAY_NAME_MAX) {
     errors.push(`Display name must be ${DISPLAY_NAME_MAX} characters or fewer.`);
   }
@@ -201,12 +225,22 @@ app.post("/register", async (c) => {
     errors.push(`Bio must be ${BIO_MAX} characters or fewer.`);
   }
   questions.forEach((q, i) => {
-    if (!q.question || !q.answer) errors.push(`Security question ${i + 1} and its answer are both required.`);
+    if (!q.questionKey || !isValidQuestionKey(q.questionKey)) {
+      errors.push(`Choose a valid option for security question ${i + 1}.`);
+    }
+    if (!q.answer) errors.push(`Security question ${i + 1} needs an answer.`);
   });
+  if (
+    questions.length === 2 &&
+    questions[0].questionKey &&
+    questions[0].questionKey === questions[1].questionKey
+  ) {
+    errors.push("Choose two different security questions.");
+  }
 
   const values: Record<string, string> = { username, display_name: displayNameInput, bio };
   questions.forEach((q, i) => {
-    values[`question_${i + 1}`] = q.question;
+    values[`question_${i + 1}`] = q.questionKey;
     values[`answer_${i + 1}`] = q.answer;
   });
 
@@ -223,7 +257,7 @@ app.post("/register", async (c) => {
     hashSecret(password),
     displayName,
     bio,
-    questions.map((q) => ({ question: q.question, answerHash: hashSecret(normaliseAnswer(q.answer)) })),
+    questions.map((q) => ({ questionKey: q.questionKey, answerHash: hashSecret(normaliseAnswer(q.answer)) })),
   );
   signIn(c, userId);
   return c.redirect("/profile", 303);
@@ -310,10 +344,25 @@ function profileForm(user: User, errors: string[]): string {
     </form>`;
 }
 
+// Read-only: the brief doesn't ask for changing security questions after
+// registration, and never shows the answers — only which questions were
+// picked.
+function securityQuestionsSummary(userId: number): string {
+  const items = getSecurityQuestions(userId)
+    .map((q) => `<li>${escapeHtml(questionTextForKey(q.question_key))}</li>`)
+    .join("");
+  return `<h2>Your security questions</h2><ul>${items}</ul>`;
+}
+
 app.get("/profile", (c) => {
   const user = currentUser(c);
   if (!user) return c.redirect("/login", 303);
-  return c.html(page("My profile", `${nav(user)}<main><h1>My profile</h1>${profileForm(user, [])}</main>`));
+  return c.html(
+    page(
+      "My profile",
+      `${nav(user)}<main><h1>My profile</h1>${profileForm(user, [])}${securityQuestionsSummary(user.id)}</main>`,
+    ),
+  );
 });
 
 app.post("/profile", async (c) => {
@@ -336,7 +385,7 @@ app.post("/profile", async (c) => {
     return c.html(
       page(
         "My profile",
-        `${nav(user)}<main><h1>My profile</h1>${profileForm({ ...user, display_name: displayNameInput, bio }, errors)}</main>`,
+        `${nav(user)}<main><h1>My profile</h1>${profileForm({ ...user, display_name: displayNameInput, bio }, errors)}${securityQuestionsSummary(user.id)}</main>`,
       ),
       400,
     );
@@ -353,14 +402,15 @@ app.post("/profile", async (c) => {
 function securityQuestionsForUsername(username: string): { position: number; question: string }[] {
   const user = findUserByUsername(username);
   if (user) {
-    return getSecurityQuestions(user.id).map((q) => ({ position: q.position, question: q.question }));
+    return getSecurityQuestions(user.id).map((q) => ({
+      position: q.position,
+      question: questionTextForKey(q.question_key),
+    }));
   }
-  // Same shape as a real account's question list, so this page alone gives
-  // no sign the username doesn't exist.
-  return Array.from({ length: RECOVERY_QUESTION_COUNT }, (_, i) => ({
-    position: i + 1,
-    question: `Security question ${i + 1}`,
-  }));
+  // Two real catalog questions, chosen deterministically from the username —
+  // the same shape and the same source list as a real account's picks, so
+  // this page alone gives no sign the username doesn't exist.
+  return placeholderQuestionsForUsername(username).map((q, i) => ({ position: i + 1, question: q.text }));
 }
 
 function resetForm(
@@ -384,9 +434,10 @@ function resetForm(
       <input type="hidden" name="username" value="${escapeHtml(username)}" />
       ${answerInputs}
       <p>
-        <label for="new_password">New password (at least ${PASSWORD_MIN} characters)</label><br />
+        <label for="new_password">New password</label><br />
         <input id="new_password" name="new_password" type="password" required minlength="${PASSWORD_MIN}"
-          autocomplete="new-password" />
+          autocomplete="new-password" aria-describedby="new-password-rule" /><br />
+        <small id="new-password-rule">${escapeHtml(PASSWORD_RULE_HINT)}</small>
       </p>
       <p>
         <label for="confirm_password">Confirm new password</label><br />
@@ -446,8 +497,9 @@ app.post("/reset-password", async (c) => {
       400,
     );
 
-  if (newPassword.length < PASSWORD_MIN) {
-    return rerender([`New password must be at least ${PASSWORD_MIN} characters.`]);
+  const newPasswordErrors = passwordErrors(newPassword);
+  if (newPasswordErrors.length > 0) {
+    return rerender(newPasswordErrors);
   }
   if (newPassword !== confirmPassword) {
     return rerender(["New password and confirmation do not match."]);
