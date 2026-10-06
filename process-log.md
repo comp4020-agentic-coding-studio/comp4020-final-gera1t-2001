@@ -214,3 +214,93 @@ is NOT NULL with no default: at registration, default it to the username if
 the user leaves it empty. In your report, show exactly how a failed recovery
 attempt avoids revealing which answer was wrong, and how the 5-attempt lock
 is counted."
+
+## 2026-10-07 — [judgement]
+
+**What happened:** Hands-on testing of step 4 turned up two gaps before step
+5: the password rule had no complexity requirement beyond length, and free-
+text security questions meant a fake account's placeholder question
+("Security question 1") was visibly different in kind from a real user's own
+wording — a sign the username didn't exist, undermining the step 4 recovery
+work. The human specified both fixes plus a live data wipe before step 5's
+tests start creating accounts.
+
+**What I did instead of the obvious thing:** For the question catalog, rather
+than just storing real question text server-side for everyone and leaving
+the "unknown username" placeholder generic, I made the placeholder draw two
+*real* catalog questions deterministically from a hash of the username —
+once every question comes from the same public six-item list, a fake pair
+looks exactly like a real pair, closing the gap this step was meant to close
+rather than just relabelling it. For the live data wipe, the first version
+of the command used `eval(Buffer.from(base64,'base64').toString())` to dodge
+nested-quoting pain, and Claude Code's auto-mode classifier correctly refused
+it as a "Blind Apply" (opaque code, unreviewable from the command text
+alone). Rewrote it as plain nested-quoted `node -e "..."` with no encoding or
+eval — same logic, fully readable in the command itself — which ran without
+being blocked.
+
+**How I knew it was right:** `pnpm typecheck` clean; registered through the
+new `<select>`-based form; a password missing each of the four character
+classes was rejected with the specific missing-part message; two identical
+questions and an out-of-catalog key were both rejected server-side (not just
+blocked by the `<select>`, since a crafted request bypasses that); the same
+unknown username returned the identical two placeholder questions on repeat
+requests while a different unknown username got a different pair; migration
+0002 applied cleanly to a fresh db (`sqlite_master` shows `question_key TEXT
+NOT NULL` plus the new unique index); `APP_URL=... pnpm check` stayed green.
+For the wipe: the live app's machine was stopped (auto_stop_machines), so a
+plain GET woke it before the ssh console command could reach it; the command
+checks each table exists before deleting (the live deploy's schema version
+wasn't known for certain in advance) and reported exact counts:
+`{"sessions":0,"security_questions":2,"users":1}`.
+
+**Citation:** `a44a916` (`src/security-questions.ts`, `src/accounts.ts`,
+`src/server.ts`, `migrations/0002_security_question_keys.sql`); live data
+wipe via `flyctl ssh console` (no commit — a run against the deployed app's
+volume, not a repo change).
+
+**Curated prompt:** "Before Step 5, do a Step 4b from my own hands-on
+testing (log it as [judgement])... Password rule: at least 8 characters,
+with at least one uppercase letter, one lowercase letter, one digit and one
+punctuation mark... Security questions: no more free text... Wipe all test
+users... Show me the exact command before running it, never print the token
+or env, and report how many rows were deleted."
+
+## 2026-10-07 — [judgement]
+
+**What happened:** C8 Step 5 asked for `spec/accounts.test.ts` per the
+brief's 7 checks, plus two more from this session's step 4b (password
+character-class rejection, duplicate/invalid security-question rejection),
+guarded so the tests never write to the live app, and proof that test 1
+isn't vacuous.
+
+**What I did instead of the obvious thing:** Used `redirect: "manual"` on
+every `fetch` that might set the session cookie (register, login) — Node's
+`fetch` discards a redirect response's own headers once it follows the
+redirect automatically, so capturing `Set-Cookie` requires *not* following it
+and reading `res.headers.getSetCookie()` from the 303 directly, then
+building subsequent requests' `Cookie` header by hand. For "names no
+answer," asserted the exact, single `<li>` text inside the error list via
+JSDOM rather than checking for the absence of revealing substrings — a
+positive assertion on the full error content is strictly stronger than
+trying to prove a negative.
+
+**How I knew it was right:** All 15 tests (2 invariants + 13 accounts) pass
+against a locally running instance. Confirmed the live-app guard by pointing
+`APP_URL` at `http://0.0.0.0:8099` (a reachable but non-localhost hostname)
+and seeing all 13 accounts tests report skipped while the 2 invariants tests
+still ran. Proved test 1 non-vacuous: temporarily made `createUser` ignore
+its `bio` argument, reran, and got exactly 2 failures — "trace persists" and
+"editing a profile without a valid session..." (which also depends on a
+registered bio surviving unchanged) — with the other 13 passing; reverted
+(`git diff` on `src/accounts.ts` came back empty) and reran green.
+
+**Citation:** `d3624c2` (`spec/accounts.test.ts`).
+
+**Curated prompt:** "Step 5 (spec/accounts.test.ts), as in the brief, plus: a
+password missing any one of the four character types is rejected;
+registering with two identical questions, or a question not in the list, is
+rejected. These tests create accounts, so they must never write to the live
+app: skip them unless APP_URL points to localhost... Prove test 1 is not
+vacuous (break it on purpose, confirm only the expected tests go red,
+revert)."
