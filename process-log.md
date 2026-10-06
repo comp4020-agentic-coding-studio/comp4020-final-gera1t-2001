@@ -162,3 +162,55 @@ stored `CREATE TABLE` statements match `migrations/0001_init.sql` exactly;
 `Dockerfile`).
 
 **Curated prompt:** "Then do Step 3 and stop."
+
+## 2026-10-07 — [judgement]
+
+**What happened:** C8 Step 4 asked for register/login/logout/profile-edit and
+password recovery, plus two specific review notes: default an empty
+`display_name` to the username, and show exactly how a failed recovery
+attempt avoids revealing which answer was wrong and how the 5-attempt lock
+is counted.
+
+**What I did instead of the obvious thing:** Added a password minimum (8
+characters) even though the brief's Limits bullet names only
+username/display-name/bio — leaving password length completely unconstrained
+seemed like an oversight rather than a deliberate choice, so I made the call
+rather than shipping a 1-character password as valid. Also applied the
+empty-display-name default on profile *edits*, not just registration, for
+the same NOT-NULL reason the human flagged for registration. For the
+recovery mechanism specifically: every submitted answer is checked with
+`.map` (not `.every`, which short-circuits) so a wrong first answer costs the
+same time as a wrong second one; a nonexistent username spends the same
+scrypt cost via `spendDummyVerify` instead of returning early; and exactly
+one `recovery_failed_attempts` increment happens per submission regardless
+of how many of the answers were wrong, with the lock set only when that
+counter reaches 5 — the error text is identical ("One or more answers were
+incorrect.") whether the username doesn't exist, one answer was wrong, or
+all were.
+
+**How I knew it was right:** Manually drove the running app with curl
+through: registration (empty display name -> username, duplicate username,
+bad username/password, overlong display name, all rejected with the
+expected message); login (right password, wrong password, unknown username —
+last two give the identical "Invalid username or password"); logout; a
+`<script>`/`onerror` payload in display name and bio coming back
+HTML-escaped on the home page; the recovery path end to end — a known
+username shows its real questions, an unknown one shows generically-labelled
+placeholders of the same shape; one wrong answer (other one right) leaves
+the old password working and shows only the generic error; four more wrong
+attempts (five total) locked the account, confirmed directly in the `users`
+row (`recovery_failed_attempts: 5`, `recovery_locked_until` set an hour
+out); a sixth attempt with the *correct* answers was still refused while
+locked; and, on a separate unlocked account, a correct full reset
+invalidated that session immediately and the old password stopped working
+while the new one logged in. `APP_URL=... pnpm check` stayed green (2/2)
+throughout.
+
+**Citation:** `761b6a5` (`src/crypto.ts`, `src/accounts.ts`,
+`src/sessions.ts`, `src/html.ts`, `src/server.ts`).
+
+**Curated prompt:** "Do Step 4 and stop. Two things to watch: display_name
+is NOT NULL with no default: at registration, default it to the username if
+the user leaves it empty. In your report, show exactly how a failed recovery
+attempt avoids revealing which answer was wrong, and how the 5-attempt lock
+is counted."
