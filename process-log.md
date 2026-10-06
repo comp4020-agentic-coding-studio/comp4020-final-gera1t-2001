@@ -42,3 +42,43 @@ Consequences slots in the ADR exactly before committing; no code was touched.
 
 **Curated prompt:** pasted ADR Decision and Consequences text, to be recorded
 as-is.
+
+## 2026-10-07 — [routine]
+
+**What happened:** Three files that existed on disk but were not yet in git
+history got committed, each as its own commit and verbatim: the human's
+README v1 draft, the C8 agent brief, and (requested, but already covered by
+`91653c6` from the previous entry, so skipped as a duplicate).
+
+**What I did instead of the obvious thing:** Committed README.md and
+`docs/c8-brief.md` exactly as they stood on disk, with no edits — the human
+asked for them recorded as-is, not reviewed or reworded by the agent.
+
+**How I knew it was right:** Checked `git status` first and confirmed the ADR
+file had no pending changes before skipping the redundant third commit,
+rather than creating an empty or duplicate one.
+
+**Citation:** `dd5e041` (`README.md`), `a39b6f7` (`docs/c8-brief.md`).
+
+**Curated prompt:** "I've filled in the ADR decision. Commit these as they
+are, without editing their content, one commit each: ... Log each of them in
+process-log.md before your next commit."
+
+## 2026-10-07 — [harness]
+
+**What happened:** Logging every commit, including a commit whose only change
+is appending to `process-log.md` itself, would recurse forever (the log
+commit would need its own log commit, which would need its own, ...).
+
+**What I did instead of the obvious thing:** Added one sentence to CLAUDE.md's
+Process logging section carving out the exception: a commit that only adds
+`process-log.md` entries needs no entry of its own.
+
+**How I knew it was right:** This is the rule this very log-batch now relies
+on — this entry's own commit bundles three citations instead of needing three
+separate log-only commits.
+
+**Citation:** `d372645` (`CLAUDE.md`).
+
+**Curated prompt:** "Also add to CLAUDE.md: a commit that only adds
+process-log entries needs no entry of its own."
