@@ -304,3 +304,23 @@ rejected. These tests create accounts, so they must never write to the live
 app: skip them unless APP_URL points to localhost... Prove test 1 is not
 vacuous (break it on purpose, confirm only the expected tests go red,
 revert)."
+
+## 2026-10-07 — [routine]
+
+**What happened:** The human updated `README.md` to match step 4b's rules
+(filled in the Robin Sloan quote, per the diff) and asked for it committed
+verbatim, with an exact commit message, and logged.
+
+**What I did instead of the obvious thing:** Nothing — committed the file
+exactly as the human left it, per CLAUDE.md/the brief's rule that README.md
+is the human's to write, not the agent's.
+
+**How I knew it was right:** Read the diff before committing (just the
+quoted passage filled in) to confirm there was nothing unexpected to flag,
+then committed unchanged.
+
+**Citation:** `38a1d41` (`README.md`).
+
+**Curated prompt:** "I updated README.md to match Step 4b. Commit it as-is
+(\"Update README to match Step 4b rules (human-written)\"), log it, then do
+Step 6 and stop."
