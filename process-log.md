@@ -324,3 +324,60 @@ then committed unchanged.
 **Curated prompt:** "I updated README.md to match Step 4b. Commit it as-is
 (\"Update README to match Step 4b rules (human-written)\"), log it, then do
 Step 6 and stop."
+
+## 2026-10-07 — [judgement] (no commit)
+
+**What happened:** C8 Step 6 asked to open the built app at 1920×1080 and
+390×844 and do a Tab-key pass through register → profile, reporting what was
+seen and what wasn't checked.
+
+**What I did instead of the obvious thing:** This sandbox has no browser
+install and no root, so rather than fall back to reading the HTML and
+reasoning about tab order from source, used the already-extracted headless
+Chromium from a previous session's workaround (`~/.cache/ms-playwright`,
+libs under `~/.local/chrome-libs`) and drove it for real over the Chrome
+DevTools Protocol (raw WebSocket, no new project dependency): registered a
+throwaway account via a plain `fetch`/curl first (far more reliable than
+simulating every keystroke for form submission), then used the real browser
+only for what actually needs one — rendering and keyboard focus order.
+First attempt used `Input.dispatchKeyEvent`-driven Enter to submit the
+register form directly in-browser, which hung indefinitely (the synthetic
+key event didn't reliably trigger the button's default action); dropped that
+in favour of the fetch-then-inject-cookie approach instead of debugging
+synthetic form submission further, since the brief only asked to observe tab
+order and rendering, not to prove keyboard-driven submission works.
+
+**How I knew it was right — what I saw:** At both viewports, Tab order on
+`/register` is Home → Log in → Register (nav) → username → password →
+display_name → bio → question_1 → answer_1 → question_2 → answer_2 → Register
+button → wraps to body, with no skipped or unreachable field; `/profile`'s
+order is Home → My profile → Log out → display_name → bio → Save, also
+complete. A mid-tab screenshot on `username` showed a visible default focus
+outline (no CSS strips it — the app has no stylesheet at all). Screenshots at
+both viewports render correctly: labels visible, nothing cut off or
+overlapping.
+
+**What I did not check, and what I found instead:** Did not visually inspect
+every intermediate focus state (only confirmed order programmatically plus
+one focus-ring screenshot) — would need a human's eyes to assess whether
+focus visibility reads clearly against the current unstyled form overall.
+Separately, while measuring the mobile layout I found a real issue: the two
+security-question `<select>` elements have no width constraint, and their
+intrinsic width is set by the longest catalog question
+("What was the name of the street you lived on when you were eight?", ~479px)
+— wider than the 390px viewport. With no CSS anywhere in the app to cap it,
+this measurably pushed the *whole page's* effective layout viewport out to
+487px instead of 390px (confirmed via `window.innerWidth`/`scrollWidth`,
+both 487), so the phone view renders slightly zoomed out/smaller than
+intended rather than cleanly filling 390px — not a crash, but a real,
+measured mobile-layout defect, left unfixed since step 6 is a look-and-report
+step, not a fix step.
+
+**Citation:** none (no commit — a visual/behavioural check, not a repo
+change). Screenshots and the throwaway CDP driver live outside the repo
+under `/tmp` (per CLAUDE.md: scripts written to drive this check are kept
+separate from the deliverable, not committed).
+
+**Curated prompt:** "Open the built app (served over HTTP) at 1920×1080 and
+390×844; do a Tab-key pass through register → profile. Report what you saw
+and anything you did not check."
