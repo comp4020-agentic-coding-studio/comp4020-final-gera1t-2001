@@ -14,6 +14,19 @@ export function page(title: string, body: string): string {
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>${escapeHtml(title)}</title>
+    <style>
+      /* A <select>'s closed box sizes to its longest <option> text by
+         default, which on narrow screens can push it (and so the whole
+         page) wider than the viewport — this caps every form control to
+         its container instead. */
+      input, select, textarea, button {
+        max-width: 100%;
+        box-sizing: border-box;
+      }
+      select {
+        text-overflow: ellipsis;
+      }
+    </style>
   </head>
   <body>
     ${body}
