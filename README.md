@@ -16,7 +16,12 @@ think getting registration right first is the best place to start.
 
 Robin Sloan, ["An app can be a home-cooked meal"](https://www.robinsloan.com/notes/home-cooked-app/) (2020).
 
-> [paste your quoted passage here]
+> Building this app, I figured it out:
+> I am the programming equivalent of a home cook.
+>
+> The exhortation “learn to code” has its foundations in market value. “Learn to code” is suggested as a way up, a way out. “Learn to code” offers economic leverage, professional transformation. “Learn to code” goes on your resume.
+>
+> But let’s substitute a different phrase: “learn to cook”. People don’t only learn to cook so they can become chefs. Some do! But many more people learn to cook so they can eat better, or more affordably. Because they want to carry on a tradition. Sometimes they learn because they’re bored! Or even because they enjoy spending time with the person who’s teaching them.
 
 One part of this essay surprised me. With AI helping, producing code that
 runs (I mean code that runs; how it runs is a separate question) is now much
