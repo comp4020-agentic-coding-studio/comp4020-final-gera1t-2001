@@ -1,5 +1,34 @@
 # Process log
 
+## 2026-10-07 — [harness]
+
+**Logged retroactively** during a later audit ("make sure every commit so
+far has a log entry") — this predates `process-log.md`'s own existence, so
+there was nowhere to log it at the time.
+
+**What happened:** Before any C8 step began, `CLAUDE.md` carried forward the
+general (non-week-specific) harness rules from `comp4020-crit7-gera1t-2001`'s
+CLAUDE.md: the verification-discipline notes, "assert what a value means, not
+how it's spelled," the model-choice policy for delegated work, and the
+process-logging convention itself (the rules this very log follows).
+
+**What I did instead of the obvious thing:** Rather than copying crit7's
+CLAUDE.md wholesale, dropped everything specific to that week's prototype (a
+booking system) and kept only what held true regardless of what was being
+built; cited commits from crit7's own repo were rewritten as cross-repo links
+rather than left as bare hashes that would look like they belonged to this
+repo's history.
+
+**How I knew it was right:** Read crit7's CLAUDE.md in full first and
+sorted its content into "general" vs. "booking-system-specific" before
+writing anything, rather than carrying over anything that merely looked
+reusable at a glance.
+
+**Citation:** `d2cd67c` (`CLAUDE.md`).
+
+**Curated prompt:** "你能不能阅读cirt7里面的claude.md，看看有什么东西可以转移过来的" /
+"通用内容先整理进来，然后push上去"
+
 ## 2026-10-07 — [judgement]
 
 **What happened:** C8 Step 1 asked for a stack ADR with 2-3 realistic
