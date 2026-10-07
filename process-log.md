@@ -495,3 +495,24 @@ included the first time.
 (38a1d41 only added the quote). I replaced it with the correct version.
 Commit it as-is (\"Fix README: add Step 4b rules missing from 38a1d41
 (human-written)\"), log it, then stop."
+
+## 2026-10-07 — [routine]
+
+**What happened:** The human wrote `PROCESS.md` (replacing the template
+placeholder) and `reflections/crit-8.md`, and asked for both committed as-is
+alongside README.md (which turned out to already be up to date from
+`35ae340`, so there was nothing new to stage for it).
+
+**What I did instead of the obvious thing:** Read both files in full before
+committing — per CLAUDE.md's rule that this file is the human's to write —
+and committed them unedited.
+
+**How I knew it was right:** Confirmed `git status` showed only `PROCESS.md`
+and `reflections/crit-8.md` as pending changes (README.md had none), so the
+commit only contains what the human actually wrote.
+
+**Citation:** `6b5085e` (`PROCESS.md`, `reflections/crit-8.md`).
+
+**Curated prompt:** "Commit README.md, PROCESS.md and reflections/crit-8.md
+as-is (human-written), log them, then run pnpm check and pnpm check:evidence
+and show me the output. Stop."
