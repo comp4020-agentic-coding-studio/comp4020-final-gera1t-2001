@@ -38,7 +38,9 @@ name and a short bio. That is all it does for now, so there is not much more
 to say about it.
 
 If you forget your password, you can reset it by answering the two security
-questions you wrote when you registered. I chose this on purpose. This is a
+questions you chose from a list when you registered. Your profile page shows
+which two questions you chose, and so does the reset page, but never the
+answers. I chose security questions on purpose. This is a
 small, non-commercial project, and security questions are a classic method
 that does not need an email address or a phone number. I use two questions
 instead of one so that it is harder for someone else to get into your
@@ -47,6 +49,11 @@ account by guessing.
 I know security questions are considered weak: answers can be forgotten or
 guessed. That is why each answer is stored hashed like a password, all
 answers must be right, and repeated wrong guesses are locked out.
+
+After using the app myself, I changed two things. Passwords now need at
+least one uppercase letter, one lowercase letter, one digit and one
+punctuation mark. And you no longer write your own security questions: you
+pick two different ones from a fixed list.
 
 ## What I chose not to build (yet)
 
@@ -58,6 +65,10 @@ still working out what this website is for, so I have not built one.
 Enforced by checks in `spec/`:
 
 - No two people can have the same username.
+- A password must be at least 8 characters long and include an uppercase
+  letter, a lowercase letter, a digit and a punctuation mark.
+- Security questions come from a fixed list, and you must pick two different
+  ones.
 - If you change your bio and then log in again from a different device, it is
   still there. It is stored on the server, not in your browser.
 - A wrong answer to any security question does not change your password, and
