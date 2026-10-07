@@ -450,3 +450,26 @@ redesign, no framework). Then re-measure with the same CDP method: at
 390×844, scrollWidth must equal 390 on /register, /profile and
 /reset-password, and the long question text must still be readable (wrap or
 truncate visibly). Show the before/after numbers, commit, log it, and stop."
+
+## 2026-10-07 — [routine] (no commit)
+
+**What happened:** The human deployed `04fe4a0` and tested the live app on
+their own phone: registered, closed the tab, came back later, logged in, the
+bio was still there, and there was no horizontal scroll.
+
+**What I did instead of the obvious thing:** Nothing to redo — this is the
+real-device confirmation of two things only a live phone can actually prove:
+that the trace genuinely persists across a closed tab and a new visit (not
+just a fresh `fetch` in a test), and that the step 6/mobile-overflow fix
+(`04fe4a0`) holds on an actual device, not just in headless Chromium's
+emulation.
+
+**How I knew it was right:** The human read it directly off their own phone
+against the deployed app — nothing left for me to independently verify here.
+
+**Citation:** none (no commit — a manual check against the live deployment,
+not a repo change).
+
+**Curated prompt:** "Phone test on the live app: registered, closed the tab,
+came back, logged in, bio still there, no horizontal scroll. Log it and
+stop."
