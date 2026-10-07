@@ -473,3 +473,25 @@ not a repo change).
 **Curated prompt:** "Phone test on the live app: registered, closed the tab,
 came back, logged in, bio still there, no horizontal scroll. Log it and
 stop."
+
+## 2026-10-07 — [routine]
+
+**What happened:** `38a1d41` only filled in README.md's quoted passage and
+missed step 4b's rules (the stronger password rule and catalog-only security
+questions), so the human replaced it with a corrected version.
+
+**What I did instead of the obvious thing:** Nothing — committed the file
+exactly as the human left it, per CLAUDE.md/the brief's rule that README.md
+is the human's to write, not the agent's.
+
+**How I knew it was right:** Read the diff before committing: it adds the
+two step 4b rules to the "What this version does" and "Enforced vs judged"
+sections, and nothing else — consistent with what `38a1d41` should have
+included the first time.
+
+**Citation:** `35ae340` (`README.md`).
+
+**Curated prompt:** "README.md in the repo was missing the Step 4b changes
+(38a1d41 only added the quote). I replaced it with the correct version.
+Commit it as-is (\"Fix README: add Step 4b rules missing from 38a1d41
+(human-written)\"), log it, then stop."
