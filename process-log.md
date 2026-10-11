@@ -693,3 +693,52 @@ throughout.
 **Curated prompt:** "[...] Also note for Step 2: when a hand ends, updating
 seats.stack and writing hand_results must happen in the same transaction.
 Show me the new SQL, log it, then do Step 2 and stop."
+
+## 2026-10-11 — [harness]
+
+**What happened:** Asked to show the exact guard against the timer acting
+twice or for the wrong player. Traced my own earlier claim ("whichever
+writes last wins") against the real code and found the write itself
+(`saveTableState`'s unconditional upsert) had no version check at all — the
+only real guarantee was the implicit, unstated fact that better-sqlite3 is
+synchronous and `applyAction` has no `await`, so nothing could interleave
+between its read and its write. True today, but nothing in the code said
+so or would catch it if that stopped being true.
+
+**What I did instead of the obvious thing:** Rather than argue the race
+was already unreachable and leave it at that, split `applyAction` into
+`prepareAction` (read + validate) and `commitPreparedAction` (an explicit
+`UPDATE ... WHERE version = ?`, checked via `.changes`), so the invariant
+is enforced by the database itself, not by an assumption about the
+runtime. Also chose a direct function-level proof over trying to win a
+real OS-level timing race with curl — explained in the commit why a curl
+race wouldn't actually exercise this code path (no await inside
+`applyAction`, so the race is only ever between two separate top-level
+calls, and the loser's own `prepareAction` already rejects it via ordinary
+`engine.validate()` in the common case).
+
+**How I knew it was right:** Prepared a fold against one version, let a
+different real call for the same player land and succeed first, then
+committed the stale prepared fold — it threw `StaleActionError`, and
+`table_state.version`, `seats.stack` and `hand_results` were all
+confirmed unchanged by that attempt (a direct DB check, not just "it threw
+something"). Also hit a real bug while proving it: the proof script set
+`process.env.DB_PATH` at the top of the file, but ES module imports
+execute before the importing module's own top-level code regardless of
+source order, so `src/db.ts` read the unset env var first and the test
+silently wrote into the repo's real local dev database
+(`data/dev.sqlite3`) instead of the intended scratch path. Caught via the
+`UNIQUE constraint failed: users.id` error on a second run, cleaned up the
+polluted file (gitignored, pure scratch), and fixed the script to set
+`DB_PATH` in the environment before starting node. Re-ran the Step 2 curl
+smoke test afterward (sit, start, legal actions, and a full hand driven
+entirely by repeated timeouts to SHOWDOWN) to confirm the refactor didn't
+change ordinary behavior; chip conservation held.
+
+**Citation:** `59438af` (`src/poker/table.ts`).
+
+**Curated prompt:** "Before Step 3: you said \"whichever one writes last
+wins the race\" for the timer vs a real click. [...] Show me the exact
+guard [...] If not, add that guard now, prove it with a run where a real
+action lands just before the deadline (the timer must then do nothing),
+commit, log."
