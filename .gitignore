@@ -2,6 +2,10 @@ node_modules/
 dist/
 *.log
 
+# scratch area for comparing candidate libraries before picking one; never
+# part of the app's own dependency tree (see docs/adr for the write-up)
+/spike/
+
 # local dev database (src/db.ts's default when DB_PATH isn't set); production
 # uses the /data volume instead
 /data/
