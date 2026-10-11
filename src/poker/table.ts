@@ -51,13 +51,58 @@ interface TableStateRow {
   updated_at: string;
 }
 
+export interface LastAction {
+  seat: number;
+  type: string; // the engine's own ActionType string: "FOLD", "CHECK", ...
+  auto: boolean; // true if the turn timer took this action, not a real click
+  at: string;
+}
+
 export interface TableView {
   table: PokerTable;
   seats: { seatNo: number; userId: number; username: string; displayName: string; stack: number }[];
   // null until the table's first hand is ever dealt.
   hand: PublicState | null;
   turnDeadline: string | null;
+  // Not persisted — purely a "something just happened" hint for the table
+  // page to show ("auto-folded"), cleared the moment a new action replaces
+  // it. Lost on restart, which is fine: nothing correctness-bearing reads it.
+  lastAction: LastAction | null;
   you: number | null;
+}
+
+// In-memory, per table_id, for the same reason as `timers` below: it's a
+// transient UI hint, not game state, so it doesn't belong in table_state.
+const lastActionByTable = new Map<number, LastAction>();
+
+// --- Live updates (Step 3) ---------------------------------------------
+//
+// One in-process pub/sub per table: every SSE connection (src/server.ts's
+// GET /tables/:id/events) subscribes here, and every function below that
+// changes a table's state calls notifyTable() once the change is committed.
+// In-memory only — fine, since a dropped connection just reconnects and
+// gets a fresh current view; nothing here is itself state that needs to
+// survive a restart.
+type TableListener = () => void;
+const tableListeners = new Map<number, Set<TableListener>>();
+
+export function subscribeToTable(tableId: number, listener: TableListener): () => void {
+  let listeners = tableListeners.get(tableId);
+  if (!listeners) {
+    listeners = new Set();
+    tableListeners.set(tableId, listeners);
+  }
+  listeners.add(listener);
+  return () => {
+    listeners.delete(listener);
+    if (listeners.size === 0) tableListeners.delete(tableId);
+  };
+}
+
+function notifyTable(tableId: number): void {
+  const listeners = tableListeners.get(tableId);
+  if (!listeners) return;
+  for (const listener of listeners) listener();
 }
 
 function getTable(tableId: number): PokerTable | undefined {
@@ -115,6 +160,7 @@ export function buildView(tableId: number, viewerUserId: number | undefined): Ta
     seats,
     hand,
     turnDeadline: stateRow?.turn_deadline ?? null,
+    lastAction: lastActionByTable.get(tableId) ?? null,
     you: viewerUserId ?? null,
   };
 }
@@ -146,6 +192,7 @@ export function sitDown(tableId: number, userId: number): void {
     userId,
     table.buy_in,
   );
+  notifyTable(tableId);
 }
 
 // Chips reset when you leave (owner decision): nothing here records or
@@ -172,6 +219,7 @@ export function leave(tableId: number, userId: number): void {
     }
   }
   db.prepare("DELETE FROM seats WHERE table_id = ? AND user_id = ?").run(tableId, userId);
+  notifyTable(tableId);
 }
 
 // --- Turn deadline persistence -----------------------------------------
@@ -262,7 +310,9 @@ export function startHand(tableId: number): void {
   db.transaction(() => {
     writeFreshTableState(tableId, engine, existing?.version ?? 0);
   })();
+  lastActionByTable.delete(tableId); // a fresh hand has no "last action" yet
   scheduleTimeoutFor(tableId);
+  notifyTable(tableId);
 }
 
 // --- Acting ----------------------------------------------------------
@@ -296,6 +346,9 @@ interface PreparedAction {
   previousVersion: number; // the version this was validated against
   stacksBeforeHand: Map<string, number>;
   handEnded: boolean;
+  auto: boolean; // true if this is the turn timer's action, not a real click
+  actingSeat: number; // who this action was for — see note at the call site below
+  actionType: string; // the engine's own ActionType string, e.g. "FOLD"
 }
 
 // Read + validate only — no write. Split out from applyAction so the version
@@ -308,6 +361,7 @@ export function prepareAction(
   playerId: string,
   rawType: string,
   amount: number | undefined,
+  auto = false,
 ): PreparedAction {
   requireTable(tableId);
   const row = getTableState(tableId);
@@ -324,6 +378,16 @@ export function prepareAction(
   const result = engine.validate(action);
   if (!result.valid) throw new PokerError(result.error);
 
+  // actionTo, read here before engine.act() moves it, is exactly the seat
+  // that's about to act — i.e. this action's seat. Captured directly rather
+  // than read back afterward from actionHistory's last entry, because a
+  // fold that ends a hand makes the engine append a further bookkeeping
+  // entry (UNCALLED_BET_RETURNED, crediting back whatever the other player
+  // over-bet) — found by actually looking at a real render, where the "last
+  // action" label was showing the wrong player having done the wrong thing.
+  const actingSeat = engine.state.actionTo;
+  if (actingSeat === null) throw new PokerError("No one is to act.");
+
   // Captured before engine.act() mutates anything: seats.stack is still the
   // pre-action value (it's only written at commit time, at hand end), so
   // it's exactly "the stack this hand started from" for the net calculation.
@@ -337,6 +401,9 @@ export function prepareAction(
     previousVersion: row.version,
     stacksBeforeHand,
     handEnded: engine.state.winners !== null,
+    auto,
+    actingSeat,
+    actionType: action.type,
   };
 }
 
@@ -351,7 +418,7 @@ export function prepareAction(
 // snapshot, the stack updates and the hand_results rows for a hand ending
 // all land together, or none of them do.
 export function commitPreparedAction(prepared: PreparedAction): void {
-  const { tableId, engine, previousVersion, stacksBeforeHand, handEnded } = prepared;
+  const { tableId, engine, previousVersion, stacksBeforeHand, handEnded, auto, actingSeat, actionType } = prepared;
   const newState = engine.state;
 
   const applied = db.transaction((): boolean => {
@@ -388,6 +455,19 @@ export function commitPreparedAction(prepared: PreparedAction): void {
       "This table changed before the action could be saved (lost a race with another action or the turn timer); nothing was applied.",
     );
   }
+
+  // actingSeat/actionType, not actionHistory's last entry: when a fold ends
+  // a hand, the engine appends a further bookkeeping entry
+  // (UNCALLED_BET_RETURNED, crediting back the other player's over-bet)
+  // after the fold itself, so "the last history entry" is the wrong action
+  // on the wrong seat for display purposes. See prepareAction's comment.
+  lastActionByTable.set(tableId, {
+    seat: actingSeat,
+    type: actionType,
+    auto,
+    at: new Date().toISOString(),
+  });
+  notifyTable(tableId);
 }
 
 // The one path every real action AND every auto (timeout) action goes
@@ -399,8 +479,9 @@ export function applyAction(
   playerId: string,
   rawType: string,
   amount: number | undefined,
+  auto = false,
 ): void {
-  commitPreparedAction(prepareAction(tableId, playerId, rawType, amount));
+  commitPreparedAction(prepareAction(tableId, playerId, rawType, amount, auto));
   scheduleTimeoutFor(tableId);
 }
 
@@ -461,7 +542,7 @@ function runTimeout(tableId: number): void {
 
   const canCheck = engine.validate({ type: "CHECK", playerId: player.id } as Action).valid;
   try {
-    applyAction(tableId, player.id, canCheck ? "check" : "fold", undefined);
+    applyAction(tableId, player.id, canCheck ? "check" : "fold", undefined, true);
   } catch (err) {
     if (err instanceof StaleActionError) {
       // A real action got there first between this function's read above

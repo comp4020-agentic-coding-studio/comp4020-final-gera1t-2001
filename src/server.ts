@@ -2,6 +2,7 @@ import { serve } from "@hono/node-server";
 import type { Context } from "hono";
 import { Hono } from "hono";
 import { deleteCookie, getCookie, setCookie } from "hono/cookie";
+import { streamSSE } from "hono/streaming";
 import { marked } from "marked";
 import { existsSync, readFileSync, statSync } from "node:fs";
 import { extname, resolve } from "node:path";
@@ -21,7 +22,17 @@ import {
 import type { User } from "./accounts.ts";
 import { hashSecret, spendDummyVerify, verifySecret } from "./crypto.ts";
 import { errorList, escapeHtml, page } from "./html.ts";
-import { PokerError, applyAction, buildView, leave, restoreSchedulersOnBoot, sitDown, startHand } from "./poker/table.ts";
+import { renderTablePage } from "./poker/page.ts";
+import {
+  PokerError,
+  applyAction,
+  buildView,
+  leave,
+  restoreSchedulersOnBoot,
+  sitDown,
+  startHand,
+  subscribeToTable,
+} from "./poker/table.ts";
 import {
   SECURITY_QUESTIONS,
   isValidQuestionKey,
@@ -554,10 +565,11 @@ app.post("/reset-password", async (c) => {
 
 // --- Poker (C9) ----------------------------------------------------------
 //
-// API-only for this step (Step 3 adds the page and the SSE stream that call
-// these same operations); verified with curl and two cookie jars, per
-// docs/c9-brief.md. Every response is "the view for user X"
-// (poker/table.ts's buildView) — never the engine's own unmasked state.
+// Every response here is "the view for user X" (poker/table.ts's
+// buildView) — never the engine's own unmasked state. GET /tables/:id is
+// the human-facing page (Step 3); GET /tables/:id/view is the same data as
+// JSON, for curl/Step 4's checks and anything else that wants it without
+// scraping HTML; GET /tables/:id/events is the SSE stream.
 
 // A PokerError's message is meant to reach the client as-is (out-of-turn,
 // illegal bet size, table full, ...); anything else is a bug, so its detail
@@ -571,13 +583,75 @@ function tableIdParam(c: Context): number | undefined {
   return Number.isInteger(id) ? id : undefined;
 }
 
+// Server-rendered first paint (docs/c9-brief.md Step 3); the page's own
+// inline script takes over from here via EventSource.
 app.get("/tables/:id", (c) => {
+  const tableId = tableIdParam(c);
+  const user = currentUser(c);
+  if (!user) return c.redirect("/login", 303);
+  const view = tableId !== undefined ? buildView(tableId, user.id) : undefined;
+  if (!view) return c.notFound();
+  return c.html(renderTablePage(view));
+});
+
+app.get("/tables/:id/view", (c) => {
   const tableId = tableIdParam(c);
   const user = currentUser(c);
   if (!user) return c.json({ error: "Log in first." }, 401);
   const view = tableId !== undefined ? buildView(tableId, user.id) : undefined;
   if (!view) return c.notFound();
   return c.json(view);
+});
+
+// SSE stream per docs/c9-brief.md Step 3: the caller's full current view on
+// connect, their own view again after any change to the table (sit, leave,
+// start, any action — real or the turn timer's), and a plain comment line
+// every ~20s so a reverse proxy (Fly's, in production) doesn't time out an
+// otherwise-idle connection. One view-shaped "dirty" flag per connection,
+// not a queue of past events: a client that's behind only ever needs the
+// current state, never a history of what it missed.
+const SSE_HEARTBEAT_MS = 20_000;
+
+app.get("/tables/:id/events", (c) => {
+  const tableId = tableIdParam(c);
+  const user = currentUser(c);
+  if (!user) return c.json({ error: "Log in first." }, 401);
+  if (tableId === undefined || !buildView(tableId, user.id)) return c.notFound();
+
+  return streamSSE(c, async (stream) => {
+    let dirty = false;
+    let wake: (() => void) | undefined;
+    const unsubscribe = subscribeToTable(tableId, () => {
+      dirty = true;
+      wake?.();
+    });
+    stream.onAbort(() => unsubscribe());
+
+    const sendView = async (): Promise<void> => {
+      const view = buildView(tableId, user.id);
+      if (view) await stream.writeSSE({ event: "view", data: JSON.stringify(view) });
+    };
+
+    await sendView(); // the caller's full current view, right on connect
+
+    while (!stream.aborted && !stream.closed) {
+      if (dirty) {
+        dirty = false;
+        await sendView();
+        continue; // re-check immediately — another change may have landed while sendView() was writing
+      }
+      await new Promise<void>((resolve) => {
+        wake = resolve;
+        setTimeout(resolve, SSE_HEARTBEAT_MS);
+      });
+      wake = undefined;
+      if (stream.aborted || stream.closed) break;
+      if (!dirty) await stream.write(": heartbeat\n\n");
+      // if dirty is now true, loop back to the top and send the view instead
+    }
+
+    unsubscribe();
+  });
 });
 
 app.post("/tables/:id/sit", (c) => {
