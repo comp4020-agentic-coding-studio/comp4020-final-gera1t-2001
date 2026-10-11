@@ -655,3 +655,41 @@ column and the seed row are unchanged. `pnpm typecheck` stayed clean.
 migration 0003 has not been pushed yet, amend 0003; if it has been pushed,
 add a new migration 0004 instead and never edit 0003. [...] Show me the new
 SQL, log it, then do Step 2 and stop."
+
+## 2026-10-11 — [judgement]
+
+**What happened:** Implemented Step 2 — `src/poker/table.ts` (sit/leave/
+start/act, the masked "view for user X", turn-timeout scheduling) and five
+routes in `src/server.ts` on top of it.
+
+**What I did instead of the obvious thing:** `ActionType` is a `const enum`
+from `@pokertools/types`; this repo's `verbatimModuleSyntax: true` makes
+importing it as a *value* a compile error (confirmed by probing a throwaway
+file: `TS2748: Cannot access ambient const enums`). Rather than loosen
+`tsconfig.json` for the whole repo to accommodate one dependency, actions
+are built as plain object literals with string `type` fields, cast `as
+Action` (a `type`-only import) at the one call site — scoped entirely to
+`src/poker/table.ts`. Separately, leaving mid-hand is rejected outright
+rather than exercising the engine's own `stand()` partial-departure handling
+(which retains a zero-stack placeholder until settlement) — simpler to
+verify correctly under the time available, and nothing in the brief or Step
+4's planned checks needs it to work.
+
+**How I knew it was right:** Ran a real server against a scratch database
+and drove it with curl and two cookie jars end to end: masked views (each
+user's `GET /tables/1` showed only their own hole cards), out-of-turn and
+illegal-action rejection (the engine's own messages, unmutated state),
+a full hand played to SHOWDOWN with `seats.stack`/`hand_results` updated
+atomically and total chips conserved (2000 before and after), sitting
+twice/leaving mid-hand/an under-minimum raise all rejected, and
+`POST .../add-chips` 404ing. Separately re-ran with `TURN_TIMEOUT_SECONDS=3`
+and let a turn actually expire: the player was auto-folded (couldn't
+legally check) through `applyAction()` — not a parallel code path — with
+the same atomic DB update as a real fold. `pnpm typecheck` stayed clean
+throughout.
+
+**Citation:** `9b6082b` (`src/poker/table.ts`, `src/server.ts`).
+
+**Curated prompt:** "[...] Also note for Step 2: when a hand ends, updating
+seats.stack and writing hand_results must happen in the same transaction.
+Show me the new SQL, log it, then do Step 2 and stop."
