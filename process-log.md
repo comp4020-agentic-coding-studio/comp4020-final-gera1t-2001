@@ -553,3 +553,25 @@ and `dist/lib/table.js` directly, not asserted from general reputation.
 
 **Curated prompt:** "Read CLAUDE.md and docs/c9-brief.md, then do Step 0
 only and stop."
+
+## 2026-10-11 — [routine]
+
+**What happened:** The human decided ADR 0002: `@pokertools/engine`, pinned
+to 1.0.20 (the version the spike actually ran against). They gave the exact
+Decision and Consequences text to write in.
+
+**What I did instead of the obvious thing:** Pasted the human's text into
+the ADR's Decision and Consequences sections verbatim and committed it
+unedited — per CLAUDE.md's rule that a human-authored decision is recorded
+as given, not rephrased.
+
+**How I knew it was right:** `git diff` before committing showed only the
+two placeholder lines (`*(left for the owner)*`) replaced by exactly the
+text the human supplied, nothing else in the file touched.
+
+**Citation:** `f98b429` (`docs/adr/0002-poker-engine.md`).
+
+**Curated prompt:** "I chose @pokertools/engine. You may write ADR 0002's
+Decision and Consequences this time, using exactly this text (it is my
+decision; do not reword it): [Decision/Consequences text]. Commit it as
+\"Record ADR 0002 decision (human decision)\", log it."
