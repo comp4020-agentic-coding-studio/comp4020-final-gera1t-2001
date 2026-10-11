@@ -21,6 +21,7 @@ import {
 import type { User } from "./accounts.ts";
 import { hashSecret, spendDummyVerify, verifySecret } from "./crypto.ts";
 import { errorList, escapeHtml, page } from "./html.ts";
+import { PokerError, applyAction, buildView, leave, restoreSchedulersOnBoot, sitDown, startHand } from "./poker/table.ts";
 import {
   SECURITY_QUESTIONS,
   isValidQuestionKey,
@@ -32,6 +33,12 @@ import { createSession, deleteSession, userForSessionToken } from "./sessions.ts
 // Opening the database here (src/db.ts) is what step 2/3 needed to show: the
 // file lives under /data in production, with the schema applied on boot.
 import "./db.ts";
+
+// Re-arms every table's turn-timeout timer from table_state.turn_deadline —
+// a table whose deadline already passed while the process was down gets its
+// auto action immediately; every other table's future deadline is
+// rescheduled. Must run after the "./db.ts" import above (migrations).
+restoreSchedulersOnBoot();
 
 const projectRoot = resolve(import.meta.dirname, "..");
 
@@ -543,6 +550,94 @@ app.post("/reset-password", async (c) => {
       <p>Your password has been reset. <a href="/login">Log in</a> with your new password.</p></main>`,
     ),
   );
+});
+
+// --- Poker (C9) ----------------------------------------------------------
+//
+// API-only for this step (Step 3 adds the page and the SSE stream that call
+// these same operations); verified with curl and two cookie jars, per
+// docs/c9-brief.md. Every response is "the view for user X"
+// (poker/table.ts's buildView) — never the engine's own unmasked state.
+
+// A PokerError's message is meant to reach the client as-is (out-of-turn,
+// illegal bet size, table full, ...); anything else is a bug, so its detail
+// stays out of the response.
+function pokerErrorMessage(err: unknown): string {
+  return err instanceof PokerError ? err.message : "Something went wrong.";
+}
+
+function tableIdParam(c: Context): number | undefined {
+  const id = Number(c.req.param("id"));
+  return Number.isInteger(id) ? id : undefined;
+}
+
+app.get("/tables/:id", (c) => {
+  const tableId = tableIdParam(c);
+  const user = currentUser(c);
+  if (!user) return c.json({ error: "Log in first." }, 401);
+  const view = tableId !== undefined ? buildView(tableId, user.id) : undefined;
+  if (!view) return c.notFound();
+  return c.json(view);
+});
+
+app.post("/tables/:id/sit", (c) => {
+  const tableId = tableIdParam(c);
+  const user = currentUser(c);
+  if (!user) return c.json({ error: "Log in first." }, 401);
+  if (tableId === undefined) return c.notFound();
+  try {
+    sitDown(tableId, user.id);
+  } catch (err) {
+    return c.json({ error: pokerErrorMessage(err) }, 400);
+  }
+  return c.json(buildView(tableId, user.id));
+});
+
+app.post("/tables/:id/leave", (c) => {
+  const tableId = tableIdParam(c);
+  const user = currentUser(c);
+  if (!user) return c.json({ error: "Log in first." }, 401);
+  if (tableId === undefined) return c.notFound();
+  try {
+    leave(tableId, user.id);
+  } catch (err) {
+    return c.json({ error: pokerErrorMessage(err) }, 400);
+  }
+  return c.json(buildView(tableId, user.id));
+});
+
+app.post("/tables/:id/start", (c) => {
+  const tableId = tableIdParam(c);
+  const user = currentUser(c);
+  if (!user) return c.json({ error: "Log in first." }, 401);
+  if (tableId === undefined) return c.notFound();
+  try {
+    startHand(tableId);
+  } catch (err) {
+    return c.json({ error: pokerErrorMessage(err) }, 400);
+  }
+  return c.json(buildView(tableId, user.id));
+});
+
+// fold / check / call / bet / raise. bet and raise need a form field
+// "amount"; the others ignore it if present.
+app.post("/tables/:id/act", async (c) => {
+  const tableId = tableIdParam(c);
+  const user = currentUser(c);
+  if (!user) return c.json({ error: "Log in first." }, 401);
+  if (tableId === undefined) return c.notFound();
+
+  const body = await c.req.parseBody();
+  const type = typeof body.type === "string" ? body.type : "";
+  const amountInput = typeof body.amount === "string" ? body.amount : undefined;
+  const amount = amountInput !== undefined && amountInput !== "" ? Number(amountInput) : undefined;
+
+  try {
+    applyAction(tableId, String(user.id), type, amount);
+  } catch (err) {
+    return c.json({ error: pokerErrorMessage(err) }, 400);
+  }
+  return c.json(buildView(tableId, user.id));
 });
 
 const port = Number(process.env.PORT ?? 8080);
