@@ -516,3 +516,40 @@ commit only contains what the human actually wrote.
 **Curated prompt:** "Commit README.md, PROCESS.md and reflections/crit-8.md
 as-is (human-written), log them, then run pnpm check and pnpm check:evidence
 and show me the output. Stop."
+
+## 2026-10-11 — [judgement]
+
+**What happened:** Ran C9 Step 0 (engine spike) in `spike/` (gitignored):
+compared `@pokertools/engine` and `poker-ts` against the brief's three
+scenarios (side pots + chip conservation, snapshot/restore, per-player view
+masking), quoting source for every behavioral claim rather than trusting
+either README. Wrote `docs/adr/0002-poker-engine.md` with Context, Options
+and a comparison table; Decision and Consequences left empty for the owner.
+
+**What I did instead of the obvious thing:** The brief's Scenario 1 ("1000
+chips each" + "A goes all-in short (300)") can't be literally true in one
+hand — if all three buy in at 1000 and A shoves on her first action, her
+all-in is for 1000, not 300. Rather than silently pick a reading or ask and
+stall the spike, I read it as "the short stack's all-in is 300" (A buys in
+for 300, B and C for 1000 each) and said so plainly in both the spike output
+and the ADR, checking conservation against the real starting total (2300)
+instead of the brief's literal 3000. Separately, discovered a plain
+`npm install @pokertools/engine` silently resolves to 1.0.20, not the latest
+2.0.4 (which needs npm >=12.2.0, unmet here) — ran every scenario against the
+version that actually installs, and flagged 2.0.4/node:24-alpine
+compatibility as unverified rather than assumed.
+
+**How I knew it was right:** Every claim in the ADR traces to a spike script
+run in `spike/pokertools.cjs` / `spike/poker-ts.cjs` with asserted,
+printed output (pot amounts, eligible seats, final stacks, restored-state
+equality, masked-view contents) — not to either library's README. The
+`poker-ts` snapshot-restore failure was isolated to its actual cause (no
+real `#private` fields — confirmed by grep — but a lost prototype chain
+through internal, non-exported classes) by reading `dist/facade/poker.js`
+and `dist/lib/table.js` directly, not asserted from general reputation.
+
+**Citation:** `2f42726` (`docs/adr/0002-poker-engine.md`, `.gitignore`,
+`docs/c9-brief.md`).
+
+**Curated prompt:** "Read CLAUDE.md and docs/c9-brief.md, then do Step 0
+only and stop."
