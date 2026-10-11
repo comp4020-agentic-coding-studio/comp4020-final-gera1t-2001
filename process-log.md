@@ -778,3 +778,52 @@ from reading the diff alone.
 
 **Curated prompt:** "Then do Step 3 (SSE + table page) and stop. Do not
 push yet."
+
+## 2026-10-12 — [harness]
+
+**What happened:** Wrote Step 4 (`spec/poker.test.ts`, the brief's 8
+checks) and spent most of the session's remaining time getting tests 7 and
+8 (the turn-timeout checks) reliably green against the real 30s default
+timeout, per the explicit instruction not to assume CI overrides it.
+
+**What I did instead of the obvious thing:** First version held each SSE
+connection open for the whole ~30-45s wait and was flaky under the real
+default specifically — investigated rather than just adding a timeout
+bump: ruled out the app itself four independent ways (direct `curl -N`
+held 38+ seconds fine; two real Chromium sessions pushed at ~20ms latency
+over much longer spans; the server's own timer logs fire within 10ms of
+schedule every time; the drop reproduced identically over raw `node:http`,
+ruling out the fetch client) before concluding it was this sandbox's
+handling of a long-lived connection on a process that's already made many
+prior requests — root cause unidentified despite that, but the symptom
+fully characterized. Flagged this to the human rather than silently
+papering over it with a polling fallback, which would have made the test
+vacuous (the server-side auto-action happens regardless of whether the
+*push* works, so polling succeeds even with push fully broken — confirmed
+this concretely before discarding the approach). Per their direction,
+restructured test 7 so the SSE connection is short-lived by design
+(opened ~3s before the deadline, not for the whole wait) rather than
+trying harder to keep a long-lived one alive, and lowered the heartbeat to
+10s to cheaply rule out an idle-connection cutoff. Kept `retry: 2` as a
+second, honest layer on top — verified it doesn't mask a real regression
+by breaking push and watching all 3 attempts fail identically, not just
+one.
+
+**How I knew it was right:** Full suite (23 tests) green against the real
+default 30s timeout, twice in a row, no retries consumed either time.
+Re-proved tests 1, 2 and 7 are not vacuous against the *final* restructured
+code (not just an earlier version): disabling the table's push entirely
+turned exactly 1 and 7 red; separately, returning the engine's unmasked
+`.state` instead of `.view(...)` from `buildView` turned exactly 2 red,
+with the leaked cards printed in the failure. `git diff` was clean after
+reverting each breakage, confirmed before moving on.
+
+**Citation:** `2bd935e` (`spec/poker.test.ts`, `src/poker/table.ts`,
+`src/server.ts`).
+
+**Curated prompt:** "Do Step 4 (spec/poker.test.ts)... Prove tests 1, 2
+and 7 are not vacuous... Commit, log." Then, after reporting test 7's
+flakiness honestly and asking how to proceed: "Don't accept a test that
+fails... Time-box this to 15 minutes: 1. Lower the SSE heartbeat from 20s
+to 10s... 2. Restructure test 7 so it doesn't need a long-lived
+connection... Re-prove that by breaking push once."
