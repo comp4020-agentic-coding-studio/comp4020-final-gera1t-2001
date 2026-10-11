@@ -27,6 +27,7 @@ import {
   PokerError,
   applyAction,
   buildView,
+  getHandResults,
   leave,
   restoreSchedulersOnBoot,
   sitDown,
@@ -603,6 +604,20 @@ app.get("/tables/:id/view", (c) => {
   return c.json(view);
 });
 
+// Append-only, oldest first. No per-viewer masking — a net win/loss amount
+// isn't hidden information the way hole cards are.
+app.get("/tables/:id/results", (c) => {
+  const tableId = tableIdParam(c);
+  const user = currentUser(c);
+  if (!user) return c.json({ error: "Log in first." }, 401);
+  if (tableId === undefined) return c.notFound();
+  try {
+    return c.json(getHandResults(tableId));
+  } catch (err) {
+    return c.json({ error: pokerErrorMessage(err) }, 400);
+  }
+});
+
 // SSE stream per docs/c9-brief.md Step 3: the caller's full current view on
 // connect, their own view again after any change to the table (sit, leave,
 // start, any action — real or the turn timer's), and a plain comment line
@@ -610,7 +625,7 @@ app.get("/tables/:id/view", (c) => {
 // otherwise-idle connection. One view-shaped "dirty" flag per connection,
 // not a queue of past events: a client that's behind only ever needs the
 // current state, never a history of what it missed.
-const SSE_HEARTBEAT_MS = 20_000;
+const SSE_HEARTBEAT_MS = 10_000;
 
 app.get("/tables/:id/events", (c) => {
   const tableId = tableIdParam(c);

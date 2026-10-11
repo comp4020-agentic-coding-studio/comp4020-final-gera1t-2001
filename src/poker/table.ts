@@ -102,7 +102,15 @@ export function subscribeToTable(tableId: number, listener: TableListener): () =
 function notifyTable(tableId: number): void {
   const listeners = tableListeners.get(tableId);
   if (!listeners) return;
-  for (const listener of listeners) listener();
+  // One listener throwing shouldn't stop the rest of a table's connections
+  // from hearing about the change.
+  for (const listener of listeners) {
+    try {
+      listener();
+    } catch (err) {
+      console.error(`poker: a table ${tableId} listener threw`, err);
+    }
+  }
 }
 
 function getTable(tableId: number): PokerTable | undefined {
@@ -163,6 +171,31 @@ export function buildView(tableId: number, viewerUserId: number | undefined): Ta
     lastAction: lastActionByTable.get(tableId) ?? null,
     you: viewerUserId ?? null,
   };
+}
+
+export interface HandResult {
+  userId: number;
+  username: string;
+  net: number;
+  endedAt: string;
+}
+
+// Append-only history, oldest first — added for Step 4's check that a
+// hand's results are recorded and stay readable after the request that
+// ended it. Nothing before Step 4 needed to read hand_results back over
+// HTTP, so there was no route for it until now.
+export function getHandResults(tableId: number): HandResult[] {
+  requireTable(tableId);
+  return db
+    .prepare(
+      `SELECT hand_results.user_id AS userId, users.username AS username,
+              hand_results.net AS net, hand_results.ended_at AS endedAt
+       FROM hand_results
+       JOIN users ON users.id = hand_results.user_id
+       WHERE hand_results.table_id = ?
+       ORDER BY hand_results.id ASC`,
+    )
+    .all(tableId) as HandResult[];
 }
 
 // --- Sitting down / leaving -------------------------------------------
