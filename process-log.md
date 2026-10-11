@@ -827,3 +827,32 @@ flakiness honestly and asking how to proceed: "Don't accept a test that
 fails... Time-box this to 15 minutes: 1. Lower the SSE heartbeat from 20s
 to 10s... 2. Restructure test 7 so it doesn't need a long-lived
 connection... Re-prove that by breaking push once."
+
+## 2026-10-12 — [routine]
+
+**What happened:** The human wrote README.md, PROCESS.md,
+`reflections/crit-9.md` and `docs/adr/0003-turn-timeout.md`, and asked for
+them committed as-is apart from two placeholders in PROCESS.md.
+
+**What I did instead of the obvious thing:** Read all four files in full
+before committing — per CLAUDE.md's rule that these are the human's to
+write — and touched only what was explicitly asked: PROCESS.md's two
+`TODO-SHA` placeholders (matched each to the right commit by reading the
+surrounding paragraph: the version-guard one against "`UPDATE ... WHERE
+version = ?`", the browser-bugs one against "a form that should have been
+hidden" and "the auto-fold label named the wrong player") and its
+top-of-file reminder comment. Nothing else in any of the four files.
+
+**How I knew it was right:** `grep -n "TODO-SHA"` after editing returned
+nothing; `git diff` showed only the two hash substitutions and the comment
+deletion against PROCESS.md, with README.md/reflections/the ADR appearing
+in the diff purely as the human's own new content, untouched by me.
+
+**Citation:** `582744a` (`README.md`, `PROCESS.md`,
+`reflections/crit-9.md`, `docs/adr/0003-turn-timeout.md`).
+
+**Curated prompt:** "I added README.md, PROCESS.md, reflections/crit-9.md
+and docs/adr/0003-turn-timeout.md (human-written). In PROCESS.md, replace
+the two TODO-SHA placeholders with the real short hashes... Also delete
+the HTML comment at the top of PROCESS.md. Change nothing else in these
+files. Commit them, log, run pnpm check and pnpm check:evidence..."
