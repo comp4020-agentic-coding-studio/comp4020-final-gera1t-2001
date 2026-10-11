@@ -21,6 +21,11 @@ Owner decisions already made (do not reopen):
   the table is a CSS shape. It must work at 1920×1080 and 390×844.
 - **Real-time transport**: server-sent events (Hono `streamSSE`), as ADR 0001
   anticipated. Actions go up as normal POST requests.
+- **Turn timeout (the owner's C9 decision, ADR 0003 to follow)**: when it is
+  your turn and you do nothing (or you disconnect), after a countdown the
+  server acts for you: **check if checking is legal, otherwise fold**. The
+  countdown length is a named constant `TURN_TIMEOUT_SECONDS = 30` (owner may
+  tune it), overridable by an env var so tests can use a short timeout.
 
 Out of scope: multiple tables, lobby, chat, tournaments, art, animations.
 
@@ -65,7 +70,9 @@ New migration `0003` (never edit 0001/0002):
   (seed one table, "Home game")
 - `seats`: table_id, seat_no, user_id, stack; one user per table, one user per
   seat
-- `table_state`: table_id, snapshot (JSON text), version, updated_at
+- `table_state`: table_id, snapshot (JSON text), version, turn_deadline
+  (when the current player's countdown ends; null when no one is to act),
+  updated_at
 - `hand_results`: id, table_id, user_id, net, ended_at
 
 Show the SQL. Stop.
@@ -80,6 +87,14 @@ Show the SQL. Stop.
   same transaction as any seat/stack change, bumping `version`. On boot,
   restore tables from their snapshots.
 - At hand end, write one `hand_results` row per player.
+- Turn timeout: whenever a new player is to act, set `turn_deadline` (now +
+  `TURN_TIMEOUT_SECONDS`) in the same transaction. When it passes, the server
+  takes the auto action (check if legal, else fold) **through the same action
+  path** as a real click: validated, saved, pushed to everyone. The deadline
+  lives in the database, not only in memory: on boot, any table whose
+  deadline already passed gets its auto action immediately, and future
+  deadlines are rescheduled. A real action that arrives first cancels the
+  timer; the timer must never act twice or act for the wrong player.
 - One function builds "the view for user X": public table state plus only
   X's own hole cards (others' only after showdown). Every response and every
   pushed event goes through it.
@@ -95,7 +110,9 @@ Verify with curl and two sessions (two cookies). Stop.
   open.
 - Table page: server-rendered first paint, then a small vanilla JS
   `EventSource` client re-renders seats, community cards, pot, whose turn,
-  and your cards. Action buttons POST with `fetch`.
+  and your cards. Show the countdown for whoever is to act, computed from the
+  server's `turn_deadline` (not a client-side timer that starts on page load),
+  and mark an auto action visibly ("auto-checked" / "auto-folded"). Action buttons POST with `fetch`.
 - Text cards in CSS boxes, red for ♥♦, black for ♠♣. Keyboard reachable.
   No horizontal overflow at 390×844.
 
@@ -119,8 +136,14 @@ Against a localhost app only (skip otherwise):
    add chips (it 404s).
 6. A hand's results are recorded and still readable after the request that
    ended it.
+7. **Timeout, check legal:** with a short test timeout, the player to act does
+   nothing; they are auto-checked, and another subscribed player receives that
+   in real time.
+8. **Timeout, facing a bet:** the player to act faces a bet and does nothing;
+   they are auto-folded. A real action just before the deadline is not
+   overridden by the timer.
 
-Prove tests 1 and 2 are not vacuous: break each on purpose (stop pushing
+Prove tests 1, 2 and 7 are not vacuous: break each on purpose (stop pushing
 events; leak one hole card into the view), confirm the expected test goes
 red, revert. Report exactly which tests went red. Stop.
 
@@ -133,6 +156,6 @@ answers. Stop.
 
 ## Step 6 — Owner only
 
-ADR 0003 (one decision about how the table behaves with several people in
-it), README update, PROCESS.md rewrite, `reflections/crit-9.md`, then `/ship`
+ADR 0003 (turn timeout: wait forever / auto-fold / auto-check-else-fold,
+what each costs, why the owner chose the last), README update, PROCESS.md rewrite, `reflections/crit-9.md`, then `/ship`
 before the cutoff.
