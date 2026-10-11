@@ -603,3 +603,32 @@ database (`DB_PATH` pointed at `/tmp`, discarded after) and read back
 **Curated prompt:** "install the library pinned to that exact version (no
 ^, no latest), make sure it is only imported from src/poker/engine.ts, and
 do Step 1. Stop after Step 1 and show me the SQL."
+
+## 2026-10-11 — [routine]
+
+**What happened:** `docs/c9-brief.md` had been replaced by the human with
+the owner's turn-timeout decision (check-if-legal-else-fold after
+`TURN_TIMEOUT_SECONDS`, env-overridable), but the first attempt to read the
+new version showed the file byte-identical to what was already committed —
+the save hadn't actually landed yet. Asked the human rather than guess or
+proceed on stale content; they re-saved it, and the re-read showed the real
+diff (turn-timeout owner decision, Step 1's `turn_deadline` column, Step 2/3
+behavior, two new Step 4 checks, Step 6's ADR 0003 scope).
+
+**What I did instead of the obvious thing:** Did not fabricate or infer
+what the "current version" might say from the task description alone;
+verified the file's actual content and mtime first, and when it matched the
+old version exactly, said so and asked rather than writing a schema change
+against a decision I hadn't actually seen in the repo.
+
+**How I knew it was right:** `git diff docs/c9-brief.md` against the
+previously committed version, after the human's re-save, showed exactly the
+turn-timeout additions described in their message and nothing else.
+
+**Citation:** `a4d4973` (`docs/c9-brief.md`).
+
+**Curated prompt:** "The repo's docs/c9-brief.md was outdated; I've
+replaced it with the current version. Re-read it: it adds my C9 decision
+(turn timeout: auto-check if legal, else auto-fold, TURN_TIMEOUT_SECONDS =
+30, overridable by env for tests) and a turn_deadline column in
+table_state."
