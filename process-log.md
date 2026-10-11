@@ -575,3 +575,31 @@ text the human supplied, nothing else in the file touched.
 Decision and Consequences this time, using exactly this text (it is my
 decision; do not reword it): [Decision/Consequences text]. Commit it as
 \"Record ADR 0002 decision (human decision)\", log it."
+
+## 2026-10-11 — [routine]
+
+**What happened:** Pinned `@pokertools/engine` to `1.0.20` exactly (no `^`)
+per ADR 0002's decision, added `src/poker/engine.ts` as the one module
+allowed to import it, and wrote C9's Step 1 schema (`migrations/0003_poker.sql`:
+`poker_tables` seeded with one "Home game" row, `seats`, `table_state`,
+`hand_results`).
+
+**What I did instead of the obvious thing:** The brief doesn't specify the
+seed table's blinds/buy-in/seat count, so rather than leave them as an
+unexplained guess I picked plain defaults (5/10 blinds matching the ADR
+0002 spike numbers, 1000 buy-in, 6 seats) and said in the migration's own
+comment that they're not an owner decision and are fine to revisit in a
+later migration.
+
+**How I knew it was right:** Applied the migration against a scratch SQLite
+database (`DB_PATH` pointed at `/tmp`, discarded after) and read back
+`sqlite_master` and the seeded row; ran `pnpm typecheck` (clean); smoke-ran
+`src/poker/engine.ts` directly (`sit`/`deal`, reached `PREFLOP`); grepped
+`src/` to confirm no file besides the wrapper imports `@pokertools/engine`.
+
+**Citation:** `22d02c9` (`package.json`, `pnpm-lock.yaml`,
+`migrations/0003_poker.sql`, `src/poker/engine.ts`).
+
+**Curated prompt:** "install the library pinned to that exact version (no
+^, no latest), make sure it is only imported from src/poker/engine.ts, and
+do Step 1. Stop after Step 1 and show me the SQL."
