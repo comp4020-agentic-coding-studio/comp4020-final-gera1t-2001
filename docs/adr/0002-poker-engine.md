@@ -199,8 +199,12 @@ without monkey-patching `node:crypto` itself.
 
 ## Decision
 
-*(left for the owner)*
+@pokertools/engine, pinned to the exact version tested in the spike.
+
+It is the only option that can save a hand to the database and restore it, which the app needs for two promises: a hand survives a restart or redeploy, and the turn countdown still fires after one. Its built-in view masking also means other players' hole cards are hidden by the library, not by code we must remember to call.
 
 ## Consequences
 
-*(left for the owner)*
+- The library is new and changes quickly, so it is pinned and wrapped in one module (src/poker/engine.ts); swapping it later means changing one file.
+- Our own checks (chip conservation, hidden cards) guard against bugs in it.
+- Its latest version needs a newer npm than we have, so upgrading is a deliberate step, not automatic.
