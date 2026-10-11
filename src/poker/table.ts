@@ -20,6 +20,13 @@ export const TURN_TIMEOUT_SECONDS = Number(process.env.TURN_TIMEOUT_SECONDS ?? 3
 // message to an HTTP response.
 export class PokerError extends Error {}
 
+// Thrown by commitPreparedAction when table_state moved between this
+// action's prepare (read + validate) and its commit (write) — see that
+// function for exactly what guarantees this, and why. A PokerError subtype,
+// so an HTTP route that doesn't care about the distinction still returns it
+// as a plain, clear 400.
+export class StaleActionError extends PokerError {}
+
 export interface PokerTable {
   id: number;
   name: string;
@@ -174,11 +181,12 @@ function computeTurnDeadline(state: PokerEngine["state"]): string | null {
   return new Date(Date.now() + TURN_TIMEOUT_SECONDS * 1000).toISOString();
 }
 
-// Writes the engine's own snapshot (never anything we derive from it by
-// hand) plus the next turn_deadline, bumping version. Callers run this
-// inside the same db.transaction() as any seat/hand_results change for the
-// same action, per docs/c9-brief.md Step 2.
-function saveTableState(tableId: number, engine: PokerEngine, previousVersion: number): void {
+// Used only by startHand: a brand-new hand always replaces whatever
+// table_state existed (or creates it, the first time a table is ever
+// dealt into) — there's no prior in-progress action to race against here
+// (startHand already checked no hand is in progress), so no version guard
+// is needed.
+function writeFreshTableState(tableId: number, engine: PokerEngine, previousVersion: number): void {
   const version = previousVersion + 1;
   const turnDeadline = computeTurnDeadline(engine.state);
   db.prepare(
@@ -190,6 +198,33 @@ function saveTableState(tableId: number, engine: PokerEngine, previousVersion: n
        turn_deadline = excluded.turn_deadline,
        updated_at = excluded.updated_at`,
   ).run(tableId, JSON.stringify(engine.snapshot), version, turnDeadline);
+}
+
+// The guard docs/c9-brief.md asks for, made explicit rather than left to the
+// accident of nothing else happening to run in between: this UPDATE only
+// lands if table_state is still at exactly `previousVersion` — the version
+// this action was read and validated against in prepareAction. SQLite
+// evaluates the WHERE clause and applies the change atomically within
+// whatever transaction this runs in; `result.changes` tells the caller
+// whether it actually happened. If some other write (a real action winning
+// a race against this table's timer, or vice versa, or this same timer
+// firing twice) already moved the version, this is a no-op — not a partial
+// write, not a crash, nothing.
+function writeTableStateIfVersionMatches(
+  tableId: number,
+  engine: PokerEngine,
+  previousVersion: number,
+): boolean {
+  const version = previousVersion + 1;
+  const turnDeadline = computeTurnDeadline(engine.state);
+  const result = db
+    .prepare(
+      `UPDATE table_state
+       SET snapshot = ?, version = ?, turn_deadline = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+       WHERE table_id = ? AND version = ?`,
+    )
+    .run(JSON.stringify(engine.snapshot), version, turnDeadline, tableId, previousVersion);
+  return result.changes === 1;
 }
 
 // --- Starting a hand -----------------------------------------------------
@@ -225,7 +260,7 @@ export function startHand(tableId: number): void {
   engine.deal();
 
   db.transaction(() => {
-    saveTableState(tableId, engine, existing?.version ?? 0);
+    writeFreshTableState(tableId, engine, existing?.version ?? 0);
   })();
   scheduleTimeoutFor(tableId);
 }
@@ -255,16 +290,25 @@ function buildAction(rawType: string, playerId: string, amount: number | undefin
   }
 }
 
-// The one path every real action AND every auto (timeout) action goes
-// through — docs/c9-brief.md Step 2 requires the timer to act "through the
-// same action path as a real click", which this is, by construction: there
-// is no second function anywhere that calls engine.act().
-export function applyAction(
+interface PreparedAction {
+  tableId: number;
+  engine: PokerEngine; // already mutated by engine.act() — holds the new state
+  previousVersion: number; // the version this was validated against
+  stacksBeforeHand: Map<string, number>;
+  handEnded: boolean;
+}
+
+// Read + validate only — no write. Split out from applyAction so the version
+// guard below (commitPreparedAction) is something that can actually be
+// demonstrated and tested directly, by preparing an action against one
+// version and then trying to commit it after something else has already
+// moved the table past that version.
+export function prepareAction(
   tableId: number,
   playerId: string,
   rawType: string,
   amount: number | undefined,
-): void {
+): PreparedAction {
   requireTable(tableId);
   const row = getTableState(tableId);
   if (!row) throw new PokerError("No hand in progress.");
@@ -281,20 +325,44 @@ export function applyAction(
   if (!result.valid) throw new PokerError(result.error);
 
   // Captured before engine.act() mutates anything: seats.stack is still the
-  // pre-action value (it's only written here, at hand end), so it's exactly
-  // "the stack this hand started from" for the net calculation below.
+  // pre-action value (it's only written at commit time, at hand end), so
+  // it's exactly "the stack this hand started from" for the net calculation.
   const stacksBeforeHand = new Map(getSeats(tableId).map((s) => [String(s.user_id), s.stack]));
 
   engine.act(action);
-  const newState = engine.state;
-  const handEnded = newState.winners !== null;
 
-  db.transaction(() => {
+  return {
+    tableId,
+    engine,
+    previousVersion: row.version,
+    stacksBeforeHand,
+    handEnded: engine.state.winners !== null,
+  };
+}
+
+// The guard docs/c9-brief.md asks for. Everything in this transaction is
+// conditioned on table_state still being at exactly `previousVersion` —
+// the version this action was prepared (read and validated) against:
+// writeTableStateIfVersionMatches() is tried FIRST, and if it reports the
+// row had already moved (some other write — a real action, or this same
+// timer firing twice — got there first), the function returns immediately
+// without touching seats or hand_results at all, then throws
+// StaleActionError. Nothing is ever partially applied: either the
+// snapshot, the stack updates and the hand_results rows for a hand ending
+// all land together, or none of them do.
+export function commitPreparedAction(prepared: PreparedAction): void {
+  const { tableId, engine, previousVersion, stacksBeforeHand, handEnded } = prepared;
+  const newState = engine.state;
+
+  const applied = db.transaction((): boolean => {
+    if (!writeTableStateIfVersionMatches(tableId, engine, previousVersion)) {
+      return false;
+    }
     if (handEnded) {
-      // Same transaction as the hand_results insert and the table_state
-      // write below, per the owner's note: a hand ending is one atomic
-      // change to the database, not three separate ones that could land
-      // only partially if the process died in between.
+      // Same transaction as the table_state write above, per the owner's
+      // note: a hand ending is one atomic change to the database, not
+      // three separate ones that could land only partially if the process
+      // died in between — and now also gated on the same version check.
       for (const player of newState.players) {
         if (!player) continue;
         const userId = Number(player.id);
@@ -312,9 +380,27 @@ export function applyAction(
         );
       }
     }
-    saveTableState(tableId, engine, row.version);
+    return true;
   })();
 
+  if (!applied) {
+    throw new StaleActionError(
+      "This table changed before the action could be saved (lost a race with another action or the turn timer); nothing was applied.",
+    );
+  }
+}
+
+// The one path every real action AND every auto (timeout) action goes
+// through — docs/c9-brief.md Step 2 requires the timer to act "through the
+// same action path as a real click", which this is, by construction: there
+// is no second function anywhere that calls engine.act().
+export function applyAction(
+  tableId: number,
+  playerId: string,
+  rawType: string,
+  amount: number | undefined,
+): void {
+  commitPreparedAction(prepareAction(tableId, playerId, rawType, amount));
   scheduleTimeoutFor(tableId);
 }
 
@@ -377,6 +463,13 @@ function runTimeout(tableId: number): void {
   try {
     applyAction(tableId, player.id, canCheck ? "check" : "fold", undefined);
   } catch (err) {
+    if (err instanceof StaleActionError) {
+      // A real action got there first between this function's read above
+      // and applyAction's own write — exactly the race
+      // writeTableStateIfVersionMatches exists to make safe. Nothing to do:
+      // whoever won already called scheduleTimeoutFor for whatever's next.
+      return;
+    }
     // Legality was just checked above; this should be unreachable. Never
     // let a timeout's own bug take the whole server down.
     console.error(`poker: timeout auto-action failed for table ${tableId}`, err);
