@@ -742,3 +742,39 @@ wins the race\" for the timer vs a real click. [...] Show me the exact
 guard [...] If not, add that guard now, prove it with a run where a real
 action lands just before the deadline (the timer must then do nothing),
 commit, log."
+
+## 2026-10-12 — [harness]
+
+**What happened:** Implemented Step 3 (SSE push + the table page) and
+verified it the way the brief asks — two real headless-Chromium sessions,
+separate profiles and cookies, over CDP — rather than trusting the markup
+or a curl-only check. That verification caught two real bugs.
+
+**What I did instead of the obvious thing:** First bug: a "hidden" form
+still rendered visibly, because my own `.actions { display: flex }` rule
+and the browser's default `[hidden] { display: none }` tie on specificity
+and mine came later in the cascade — invisible to `pnpm check` (jsdom-based,
+per CLAUDE.md's own warning) and only caught by looking at an actual
+screenshot. Fixed with an `[hidden]`-qualified override rather than
+reordering rules (which would've been fragile against the next edit).
+Second bug: the "auto-fold" label showed the wrong player doing the wrong
+thing, because a fold that ends a hand makes the engine append a further
+bookkeeping entry (`UNCALLED_BET_RETURNED`) after the fold in
+`actionHistory`, so "the last entry" wasn't the action that was actually
+just taken. Fixed by capturing the acting seat and action type directly in
+`prepareAction` (from `actionTo`, read before `engine.act()` moves it and
+from the action object already in hand) instead of reading them back from
+history — removes the possibility of this class of bug entirely, not just
+this one instance of it.
+
+**How I knew it was right:** Re-ran the full two-browser flow after each
+fix and confirmed the specific symptom was gone (screenshot showing the
+form actually hidden; screenshot showing "auto-fold" on the seat that
+actually folded) before moving on, rather than assuming either fix worked
+from reading the diff alone.
+
+**Citation:** `810ed72` (`src/poker/page.ts`, `src/poker/table.ts`,
+`src/server.ts`).
+
+**Curated prompt:** "Then do Step 3 (SSE + table page) and stop. Do not
+push yet."
