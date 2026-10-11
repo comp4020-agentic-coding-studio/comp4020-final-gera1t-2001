@@ -32,11 +32,18 @@ CREATE TABLE seats (
 -- getter / `restore`), one row per table, so a hand survives a restart or
 -- redeploy (Step 2) instead of vanishing with the process. `version` is
 -- bumped on every write and exists so a client reconnecting via SSE (Step
--- 3) can tell whether the view it already has is stale.
+-- 3) can tell whether the view it already has is stale. `turn_deadline` is
+-- the owner's turn-timeout decision (docs/c9-brief.md): when it is set, it's
+-- the moment the current player's countdown expires and the server must act
+-- for them (check if legal, else fold); null whenever no one is waiting to
+-- act. Living here, not only in server memory, is what lets the deadline
+-- survive a restart: on boot, an already-passed deadline is handled
+-- immediately instead of silently never firing.
 CREATE TABLE table_state (
   table_id INTEGER PRIMARY KEY REFERENCES poker_tables (id) ON DELETE CASCADE,
   snapshot TEXT NOT NULL,
   version INTEGER NOT NULL DEFAULT 0,
+  turn_deadline TEXT,
   updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
 );
 
