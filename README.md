@@ -1,16 +1,20 @@
 # no name
 
-## Where this stands
+## What this is
 
-I have not decided what this website is going to be yet. So far I have built
-a registration page and a profile page.
+A Texas Hold'em table for friends. It suits an offline get-together, or
+passing the time together online. Everyone plays from their own device, and
+what one person does shows up for everyone else at the table.
 
-## What good might mean here
+## What good means here
 
-I know registration may not count as the core of this week's crit. But from
-my own point of view, it is the core of every website: each person's account
-belongs to them alone and cannot be shared. Whatever I end up building, I
-think getting registration right first is the best place to start.
+For this app, good means a game of Texas Hold'em that plays smoothly.
+
+When it is your turn and you do nothing, the table does not wait forever:
+after 30 seconds it checks for you if it can, and folds for you if it can't.
+I chose this because it is the rule mainstream poker games use. The options I
+considered and what this choice costs are in
+[ADR 0003](docs/adr/0003-turn-timeout.md).
 
 ## What I read
 
@@ -31,53 +35,30 @@ But this passage still gave me something. When I first moved from business
 to computing, it was only to add one more skill. When it comes to
 programming, I am like a home cook.
 
-## What this version does
+## Accounts
 
-You can register with a username and password, log in, and set a display
-name and a short bio. That is all it does for now, so there is not much more
-to say about it.
+You need an account to sit at the table. A password on its own is not safe
+enough, because if you forget it you cannot reset it, so you also choose two
+security questions from a fixed list. Security questions are a classic design
+that needs no email address or phone number.
 
-If you forget your password, you can reset it by answering the two security
-questions you chose from a list when you registered. Your profile page shows
-which two questions you chose, and so does the reset page, but never the
-answers. I chose security questions on purpose. This is a
-small, non-commercial project, and security questions are a classic method
-that does not need an email address or a phone number. I use two questions
-instead of one so that it is harder for someone else to get into your
-account by guessing.
+## What I chose not to build
 
-I know security questions are considered weak: answers can be forgotten or
-guessed. That is why each answer is stored hashed like a password, all
-answers must be right, and repeated wrong guesses are locked out.
-
-After using the app myself, I changed two things. Passwords now need at
-least one uppercase letter, one lowercase letter, one digit and one
-punctuation mark. And you no longer write your own security questions: you
-pick two different ones from a fixed list.
-
-## What I chose not to build (yet)
-
-Chat. Once people can register, adding a chat room would be easy. But I am
-still working out what this website is for, so I have not built one.
+Chip exchange. Every seat gets the same fixed number of chips, and the game
+is purely for fun. If chips could be bought or exchanged for anything, at any
+rate, the app could risk breaking the law.
 
 ## Enforced vs judged
 
 Enforced by checks in `spec/`:
 
-- No two people can have the same username.
-- A password must be at least 8 characters long and include an uppercase
-  letter, a lowercase letter, a digit and a punctuation mark.
-- Security questions come from a fixed list, and you must pick two different
-  ones.
-- If you change your bio and then log in again from a different device, it is
-  still there. It is stored on the server, not in your browser.
-- A wrong answer to any security question does not change your password, and
-  the app does not say which answer was wrong.
-- After 5 failed recovery attempts, password recovery for that account is
-  locked for an hour.
-- Resetting your password logs out every device that was logged in before.
+- Before showdown, other players' hole cards are never sent to your browser.
+- The total number of chips at the table never changes during a hand.
+- There is no way to buy or transfer chips.
+- What another player does appears on your screen within a second, without
+  reloading.
+- If you do nothing on your turn, the table checks or folds for you.
+- No two people can have the same username, and your bio is still there when
+  you log in again from another device.
 
-Judged by me:
-
-- Whether registering is confusing.
-- Whether it is comfortable to use on a phone.
+Judged by people: whether it is actually fun to play.

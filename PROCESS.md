@@ -2,92 +2,102 @@
 
 ## Where this stands
 
-The app is live at <https://comp4020-final-gera1t-2001.fly.dev>. You can
-register, log in, edit your display name and bio, and reset a forgotten
-password with two security questions. Your bio is still there when you log in
-again from another device.
+The app is a real-time Texas Hold'em table for friends, live at
+<https://comp4020-final-gera1t-2001.fly.dev>. Players register, sit down with
+a fixed stack of play chips, and play hands; every action reaches every other
+open session within about a second, without a reload. In crit 8 it was only an
+account system, because I had not decided what to build. This week I decided:
+a poker table for friends, built on the account system I already had.
 
-This week I only built an account system, because I have not yet worked out
-what this website is going to be.
+## Stack
 
-## Stack: Hono + better-sqlite3, hand-written SQL
-
-The agent laid out three options in ADR 0001
-([`57d4b4a`](https://github.com/comp4020-agentic-coding-studio/comp4020-final-gera1t-2001/commit/57d4b4a)),
-and I made the decision myself
-([`91653c6`](https://github.com/comp4020-agentic-coding-studio/comp4020-final-gera1t-2001/commit/91653c6)):
-it prepares for week 10's real-time requirement, and the SQL stays visible.
-
+**Hono + better-sqlite3, hand-written SQL** (ADR 0001,
+[`91653c6`](https://github.com/comp4020-agentic-coding-studio/comp4020-final-gera1t-2001/commit/91653c6)).
 I gave up the stack that already worked in crit 7 because I do not consider
 myself familiar with full-stack work yet, and this was a chance to try a
 different stack and architecture. Every full-stack project starts over when
-you choose a stack. A path that worked before does not make the next one
-easier, because what you build is never the same, even with a similar stack.
+you choose a stack; what you build is never the same, even with a similar
+stack. It also prepared for this week: Hono serves server-sent events directly,
+which is how the table goes real-time.
+
+**A rules engine, not a whole poker app.** I did not want to write poker rules
+myself, and the open-source poker apps I found came with their own stacks
+(and in one case a GPL licence). The agent ran a time-boxed spike comparing two
+libraries on the same scenarios: side pots and chip conservation, saving a
+hand to JSON and restoring it, and hiding other players' cards
+([`2f42726`](https://github.com/comp4020-agentic-coding-studio/comp4020-final-gera1t-2001/commit/2f42726)).
+I chose `@pokertools/engine`
+([`f98b429`](https://github.com/comp4020-agentic-coding-studio/comp4020-final-gera1t-2001/commit/f98b429))
+because it was the only one that could save and restore a hand, which the app
+needs so a hand and its countdown survive a restart. It is new, so it is
+pinned to the exact version tested and only imported from one module.
 
 ## How I directed the agent
 
-Before any code, I gave the agent a step-by-step brief
-([`a39b6f7`](https://github.com/comp4020-agentic-coding-studio/comp4020-final-gera1t-2001/commit/a39b6f7)).
-After each step it reports what it verified and what it did not, then stops
-and waits for me. It may not edit README.md, PROCESS.md, the reflections or
-the ADR decision. Deploys and the Fly token stay with me.
-
+Before any code, the agent gets a step-by-step brief. After each step it
+reports what it verified and what it did not, then stops and waits for me. It
+may not edit README.md, PROCESS.md, the reflections or an ADR's decision.
 I made it stop after every step because the AI is very capable: in auto mode
 it would probably do everything in one go, and that would leave a lot of work
-I had no way to check.
+I had no way to check. The decisions in the brief are mine: play chips only,
+a fixed buy-in, and the turn-timeout rule in
+[ADR 0003](docs/adr/0003-turn-timeout.md).
 
 ## Moments
 
-### A logging rule that never ended [harness]
+### The brief I changed never reached the repo [judgement]
 
-`CLAUDE.md` said every commit needs a process-log entry. To log
-[`57d4b4a`](https://github.com/comp4020-agentic-coding-studio/comp4020-final-gera1t-2001/commit/57d4b4a),
-the agent made a log-only commit,
-[`e391481`](https://github.com/comp4020-agentic-coding-studio/comp4020-final-gera1t-2001/commit/e391481),
-which by the same rule needed its own entry, and so on forever. The fix went
-into the harness rather than a retry: a commit that only adds log entries
-needs no entry of its own
-([`d372645`](https://github.com/comp4020-agentic-coding-studio/comp4020-final-gera1t-2001/commit/d372645)).
+After I added the turn-timeout decision to the brief, I told the agent to
+carry on. It compared the file's hash and modification time against the last
+commit, found the brief unchanged, and stopped to ask me instead of guessing
+what the decision said. The updated brief was then committed
+([`a4d4973`](https://github.com/comp4020-agentic-coding-studio/comp4020-final-gera1t-2001/commit/a4d4973))
+and the missing `turn_deadline` column added
+([`895e48d`](https://github.com/comp4020-agentic-coding-studio/comp4020-final-gera1t-2001/commit/895e48d)).
+This showed I had not finished my own part. Next time I should double-check
+it myself before handing over.
 
-I did not notice this myself. It was pointed out by the Claude chat I use for
-planning, and I had the agent add the rule. I think it happened because my harness is less
-complete than in earlier crits: this time I only carried part of crit 7's
-`CLAUDE.md` over, and that left gaps like this one.
+### The timer could act on a stale table [harness]
 
-### Changes that only came from using it myself [judgement]
+The agent first said that if a real click and the timer collided, "whichever
+one writes last wins". The AI caught this, not me: the Claude chat I plan
+with questioned that phrase, and the agent then traced it and admitted the only
+protection was that better-sqlite3 happens to be synchronous, which nothing
+enforced. It split the action into prepare and commit, and the commit now
+only applies if the table's version is unchanged (`UPDATE ... WHERE version
+= ?`), proven by letting a real action land first and watching the stale
+timer action get rejected
+([`59438af`](https://github.com/comp4020-agentic-coding-studio/comp4020-final-gera1t-2001/commit/59438af)).
 
-Before I tried the app by hand, it had an 8-character minimum password and
-security questions you wrote yourself. After using it, I felt both would go
-wrong too easily, based on my own experience of registering and logging in on
-all kinds of websites. So I asked for a password with an uppercase letter, a
-lowercase letter, a digit and a punctuation mark, and for questions picked
-from a fixed list
-([`a44a916`](https://github.com/comp4020-agentic-coding-studio/comp4020-final-gera1t-2001/commit/a44a916)).
-Tests for both went into `spec/accounts.test.ts`
-([`d3624c2`](https://github.com/comp4020-agentic-coding-studio/comp4020-final-gera1t-2001/commit/d3624c2)),
-and the agent proved the core "your bio persists" test was not vacuous by
-breaking bio saving on purpose: exactly the two expected tests went red, then
-it reverted.
+### Green checks, wrong page [harness]
 
-### The README stopped matching the app [judgement]
+All checks passed, but driving two real headless-Chromium sessions found two
+bugs: a form that should have been hidden was still visible (a CSS rule beat
+the browser's `[hidden]` style), and the auto-fold label named the wrong
+player
+([`810ed72`](https://github.com/comp4020-agentic-coding-studio/comp4020-final-gera1t-2001/commit/810ed72)).
+Tests passing is not enough; it still needs a real browser.
 
-My README is the contract for this app, but after the step 4b changes the
-committed README still said you write your own security questions
-([`38a1d41`](https://github.com/comp4020-agentic-coding-studio/comp4020-final-gera1t-2001/commit/38a1d41)
-only added the quote). This was mainly on me: I did not update the README in
-time, and I did not tell the agent. No test could have caught it. I found it
-while reviewing the process log before shipping.
+## What protects the promises
+
+`spec/poker.test.ts`
+([`2bd935e`](https://github.com/comp4020-agentic-coding-studio/comp4020-final-gera1t-2001/commit/2bd935e))
+checks real-time delivery, hidden cards, chip conservation, out-of-turn
+actions, the fixed buy-in and both timeout outcomes. The agent proved the
+key tests are not vacuous: turning off the push made exactly the two
+real-time tests fail, and leaking one hole card made exactly the hidden-cards
+test fail. When one timeout test kept failing for reasons outside the app, the
+agent stopped and reported it instead of weakening the test; I gave it a
+15-minute time box, and restructuring the test fixed it without making it
+weaker.
 
 ## The reading
 
-AI makes it easy to write code that runs, which means anyone can do
-full-stack development now. But that is not enough to do full-stack
-development well.
+AI makes it easy to write code that runs, which means anyone can do full-stack
+development now. But that is not enough to do full-stack development well.
 
 ## What has not been checked
 
-CI does not run while the repo is private, so until `/ship` the image was
-checked by Fly's remote build plus `pnpm check` against the live URL (2/2;
-the 13 account tests deliberately skip against the live URL so they never
-write to it). Keyboard focus visibility was judged from one screenshot and my
-own eyes, not tested.
+No hand has been played with more than two people seated. Reconnecting relies
+on the browser's built-in EventSource retry and was not tested by killing the
+server mid-hand. Whether the game is fun has not been judged by anyone but me.
