@@ -632,3 +632,26 @@ replaced it with the current version. Re-read it: it adds my C9 decision
 (turn timeout: auto-check if legal, else auto-fold, TURN_TIMEOUT_SECONDS =
 30, overridable by env for tests) and a turn_deadline column in
 table_state."
+
+## 2026-10-11 — [routine]
+
+**What happened:** Added `turn_deadline` (nullable `TEXT`) to `table_state`
+in migration `0003_poker.sql`, per the updated brief's turn-timeout decision.
+
+**What I did instead of the obvious thing:** Checked `origin/main` first
+rather than assume: 0003 hadn't been pushed (`git fetch` + `git log
+origin/main` still showed `0180bb9`, the commit before any C9 work), so it
+was amended directly rather than adding a 0004, per the brief's explicit
+rule for this case.
+
+**How I knew it was right:** Re-applied the amended migration against a
+fresh scratch database and read `PRAGMA table_info(table_state)` back:
+`turn_deadline` is present with `notnull=0` (nullable) and every other
+column and the seed row are unchanged. `pnpm typecheck` stayed clean.
+
+**Citation:** `895e48d` (`migrations/0003_poker.sql`).
+
+**Curated prompt:** "Add turn_deadline (nullable) to table_state. If
+migration 0003 has not been pushed yet, amend 0003; if it has been pushed,
+add a new migration 0004 instead and never edit 0003. [...] Show me the new
+SQL, log it, then do Step 2 and stop."
