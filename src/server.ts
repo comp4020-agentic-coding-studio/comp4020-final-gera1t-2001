@@ -94,15 +94,30 @@ function signIn(c: Context, userId: number): void {
   });
 }
 
-function nav(user: User | undefined): string {
+// Only ever a same-site, root-relative path — never a scheme or a
+// protocol-relative "//host" — so this can't be used to redirect a visitor
+// off-site after they log in or register.
+function safeNextPath(raw: unknown): string | undefined {
+  if (typeof raw !== "string" || raw === "") return undefined;
+  if (!raw.startsWith("/") || raw.startsWith("//") || raw.startsWith("/\\") || raw.includes("://")) {
+    return undefined;
+  }
+  return raw;
+}
+
+function nav(user: User | undefined, next?: string): string {
+  // Carried onto the logged-out links too, so a visitor who lands on /login
+  // from a protected page and then switches to /register (or back) doesn't
+  // lose where they were headed.
+  const suffix = next ? `?next=${encodeURIComponent(next)}` : "";
   return user
     ? `<nav>
-        <a href="/">Home</a> | <a href="/profile">My profile</a> |
+        <a href="/">Home</a> | <a href="/tables/1">Table</a> | <a href="/profile">My profile</a> |
         <form method="post" action="/logout" style="display:inline">
           <button type="submit">Log out</button>
         </form>
       </nav>`
-    : `<nav><a href="/">Home</a> | <a href="/login">Log in</a> | <a href="/register">Register</a></nav>`;
+    : `<nav><a href="/">Home</a> | <a href="/tables/1">Table</a> | <a href="/login${suffix}">Log in</a> | <a href="/register${suffix}">Register</a></nav>`;
 }
 
 const app = new Hono();
@@ -121,8 +136,7 @@ app.get("/", (c) => {
       `${nav(currentUser(c))}
       <main>
         <h1>Members</h1>
-        <p>This site's direction is not decided yet — see <a href="/readme/">the README</a>
-        for where things stand.</p>
+        <p>A Texas Hold'em table for friends. <a href="/tables/1">Join the table</a>.</p>
         ${members.length > 0 ? `<ul>${items}</ul>` : "<p>No one has registered yet.</p>"}
       </main>`,
     ),
@@ -161,7 +175,7 @@ app.get("/readme/:asset{.+}", (c) => {
 
 // --- Register ---------------------------------------------------------
 
-function registerForm(errors: string[], values: Record<string, string>): string {
+function registerForm(errors: string[], values: Record<string, string>, next?: string): string {
   const v = (k: string): string => escapeHtml(values[k] ?? "");
   const questionOptions = (selected: string): string =>
     `<option value="" disabled${selected ? "" : " selected"}>Choose a question</option>` +
@@ -186,6 +200,7 @@ function registerForm(errors: string[], values: Record<string, string>): string 
   return `
     ${errorList(errors)}
     <form method="post" action="/register">
+      ${next ? `<input type="hidden" name="next" value="${escapeHtml(next)}" />` : ""}
       <p>
         <label for="username">Username (3-20 lowercase letters, numbers, underscore)</label><br />
         <input id="username" name="username" type="text" required pattern="[a-z0-9_]{3,20}"
@@ -213,13 +228,17 @@ function registerForm(errors: string[], values: Record<string, string>): string 
 }
 
 app.get("/register", (c) => {
-  if (currentUser(c)) return c.redirect("/profile", 303);
-  return c.html(page("Register", `${nav(undefined)}<main><h1>Register</h1>${registerForm([], {})}</main>`));
+  const next = safeNextPath(c.req.query("next"));
+  if (currentUser(c)) return c.redirect(next ?? "/profile", 303);
+  return c.html(
+    page("Register", `${nav(undefined, next)}<main><h1>Register</h1>${registerForm([], {}, next)}</main>`),
+  );
 });
 
 app.post("/register", async (c) => {
   const body = await c.req.parseBody();
   const str = (k: string): string => (typeof body[k] === "string" ? (body[k] as string) : "");
+  const next = safeNextPath(str("next"));
 
   const username = str("username").trim();
   const password = str("password");
@@ -265,7 +284,7 @@ app.post("/register", async (c) => {
 
   if (errors.length > 0) {
     return c.html(
-      page("Register", `${nav(undefined)}<main><h1>Register</h1>${registerForm(errors, values)}</main>`),
+      page("Register", `${nav(undefined, next)}<main><h1>Register</h1>${registerForm(errors, values, next)}</main>`),
       400,
     );
   }
@@ -279,15 +298,16 @@ app.post("/register", async (c) => {
     questions.map((q) => ({ questionKey: q.questionKey, answerHash: hashSecret(normaliseAnswer(q.answer)) })),
   );
   signIn(c, userId);
-  return c.redirect("/profile", 303);
+  return c.redirect(next ?? "/profile", 303);
 });
 
 // --- Log in / log out ---------------------------------------------------
 
-function loginForm(error: string | undefined, username: string): string {
+function loginForm(error: string | undefined, username: string, next?: string): string {
   return `
     ${error ? errorList([error]) : ""}
     <form method="post" action="/login">
+      ${next ? `<input type="hidden" name="next" value="${escapeHtml(next)}" />` : ""}
       <p>
         <label for="username">Username</label><br />
         <input id="username" name="username" type="text" required autocomplete="username"
@@ -303,14 +323,16 @@ function loginForm(error: string | undefined, username: string): string {
 }
 
 app.get("/login", (c) => {
-  if (currentUser(c)) return c.redirect("/profile", 303);
-  return c.html(page("Log in", `${nav(undefined)}<main><h1>Log in</h1>${loginForm(undefined, "")}</main>`));
+  const next = safeNextPath(c.req.query("next"));
+  if (currentUser(c)) return c.redirect(next ?? "/profile", 303);
+  return c.html(page("Log in", `${nav(undefined, next)}<main><h1>Log in</h1>${loginForm(undefined, "", next)}</main>`));
 });
 
 app.post("/login", async (c) => {
   const body = await c.req.parseBody();
   const username = typeof body.username === "string" ? body.username.trim() : "";
   const password = typeof body.password === "string" ? body.password : "";
+  const next = safeNextPath(typeof body.next === "string" ? body.next : undefined);
 
   const user = findUserByUsername(username);
   let ok: boolean;
@@ -327,14 +349,14 @@ app.post("/login", async (c) => {
     return c.html(
       page(
         "Log in",
-        `${nav(undefined)}<main><h1>Log in</h1>${loginForm("Invalid username or password.", username)}</main>`,
+        `${nav(undefined, next)}<main><h1>Log in</h1>${loginForm("Invalid username or password.", username, next)}</main>`,
       ),
       400,
     );
   }
 
   signIn(c, user.id);
-  return c.redirect("/profile", 303);
+  return c.redirect(next ?? "/profile", 303);
 });
 
 app.post("/logout", (c) => {
@@ -589,7 +611,13 @@ function tableIdParam(c: Context): number | undefined {
 app.get("/tables/:id", (c) => {
   const tableId = tableIdParam(c);
   const user = currentUser(c);
-  if (!user) return c.redirect("/login", 303);
+  if (!user) {
+    // tableId is already validated as a plain integer by tableIdParam, so
+    // it's safe to embed directly — nothing a visitor supplied reaches this
+    // path unvalidated.
+    const next = tableId !== undefined ? `/tables/${tableId}` : "/tables/1";
+    return c.redirect(`/login?next=${encodeURIComponent(next)}`, 303);
+  }
   const view = tableId !== undefined ? buildView(tableId, user.id) : undefined;
   if (!view) return c.notFound();
   return c.html(renderTablePage(view));
