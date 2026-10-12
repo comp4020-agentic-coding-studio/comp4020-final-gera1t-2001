@@ -856,3 +856,46 @@ and docs/adr/0003-turn-timeout.md (human-written). In PROCESS.md, replace
 the two TODO-SHA placeholders with the real short hashes... Also delete
 the HTML comment at the top of PROCESS.md. Change nothing else in these
 files. Commit them, log, run pnpm check and pnpm check:evidence..."
+
+## 2026-10-12 — [judgement]
+
+**What happened:** A visitor had no way to find the poker table: the nav
+never linked to it and the home page still read its pre-table copy. Added
+a "Table" nav link, replaced the home page's intro, and a post-login/
+register redirect back to wherever a logged-out visitor was headed.
+
+**What I did instead of the obvious thing:** The redirect needed a `next`
+destination to survive a visitor switching between /login and /register
+mid-flow (e.g. landing on /login via the redirect, then realising they
+need to register instead) — not just a one-hop query param. Threaded it
+through as a hidden form field on both forms (including validation-error
+re-renders, which also needed to keep it) and appended it to nav()'s own
+Log in/Register links, so the two pages can hand it back and forth without
+it ever only living in a URL that gets left behind by a POST. Wrote
+`safeNextPath()` to accept only a root-relative path, rather than trusting
+a visitor-supplied value as-is — this is a redirect driven directly by
+user input, the shape of thing that becomes an open-redirect vector if
+left unchecked.
+
+**How I knew it was right:** Drove the real flow in headless Chromium as a
+brand-new visitor, starting from the home page: Join the table -> redirected
+to /login?next=... -> switched to Register from there (confirming nav()'s
+carried-through link) -> registered -> landed on the real table page, not
+/profile or home. Repeated at 390x844 on a separate fresh browser profile
+(a logged-in leftover session from the first run would have skipped the
+redirect entirely) with no horizontal overflow at any step. Separately
+confirmed via direct requests that `//evil.com`, `https://evil.com`,
+`javascript:alert(1)`, and the `/\evil.com` backslash variant are all
+rejected (redirect falls back to `/profile`), not just a same-site path
+accepted. pnpm check: 4 files, 24/24 tests green, including the new
+`spec/home.test.ts`, which asserts on the parsed DOM and a resolved URL
+rather than a substring match.
+
+**Citation:** `7f2aa78` (`src/server.ts`, `spec/home.test.ts`).
+
+**Curated prompt:** "A visitor can't find the poker table: the home page
+and nav have no link to /tables/1... Add 'Table' to the nav... Replace the
+home page's intro line... send them back to /tables/1 instead of the home
+page. Only allow same-site paths for this redirect. Add a spec check...
+Verify in a real browser from the home page, as a new visitor... pnpm
+check green, commit, log, push, confirm CI and deploy pass."
