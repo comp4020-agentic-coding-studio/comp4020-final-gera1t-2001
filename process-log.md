@@ -899,3 +899,28 @@ home page's intro line... send them back to /tables/1 instead of the home
 page. Only allow same-site paths for this redirect. Add a spec check...
 Verify in a real browser from the home page, as a new visitor... pnpm
 check green, commit, log, push, confirm CI and deploy pass."
+
+## 2026-10-12 — [routine]
+
+**What happened:** The previous commit's new home page copy ("A Texas
+Hold'em table for friends. Join the table.") replaced the old intro
+paragraph, which was also the site's only link to `/readme/`. The README
+became unreachable from the UI.
+
+**What I did instead of the obvious thing:** Rather than putting the link
+back into the home page paragraph (which the prior fix had deliberately
+shortened per the brief), added a permanent "About" link to `nav()`,
+pointing at `/readme/`, in both the logged-in and logged-out branches — so
+it survives future rewrites of the home page copy.
+
+**How I knew it was right:** Started the app on a fresh scratch DB with no
+`TURN_TIMEOUT_SECONDS` override (mirroring CI) and ran `pnpm check` against
+it: 4 files, 24/24 tests green. Also fetched `/` directly and confirmed the
+rendered `<nav>` contains `<a href="/readme/">About</a>` for a logged-out
+visitor.
+
+**Citation:** `713d30d` (`src/server.ts`).
+
+**Curated prompt:** "The home page lost its link to the README. Add
+'About' to the nav, linking to /readme/, for everyone. pnpm check green,
+commit, log, push, confirm deploy. Stop."
