@@ -112,12 +112,12 @@ function nav(user: User | undefined, next?: string): string {
   const suffix = next ? `?next=${encodeURIComponent(next)}` : "";
   return user
     ? `<nav>
-        <a href="/">Home</a> | <a href="/tables/1">Table</a> | <a href="/profile">My profile</a> |
+        <a href="/">Home</a> | <a href="/tables/1">Table</a> | <a href="/readme/">About</a> | <a href="/profile">My profile</a> |
         <form method="post" action="/logout" style="display:inline">
           <button type="submit">Log out</button>
         </form>
       </nav>`
-    : `<nav><a href="/">Home</a> | <a href="/tables/1">Table</a> | <a href="/login${suffix}">Log in</a> | <a href="/register${suffix}">Register</a></nav>`;
+    : `<nav><a href="/">Home</a> | <a href="/tables/1">Table</a> | <a href="/readme/">About</a> | <a href="/login${suffix}">Log in</a> | <a href="/register${suffix}">Register</a></nav>`;
 }
 
 const app = new Hono();
