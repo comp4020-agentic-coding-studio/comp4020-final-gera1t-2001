@@ -601,6 +601,32 @@ function pokerErrorMessage(err: unknown): string {
   return err instanceof PokerError ? err.message : "Something went wrong.";
 }
 
+// Final brief Step 2: one browser profile shares one cookie jar, so a table
+// page opened as A keeps posting after another tab signs the jar in as B —
+// and without this, B's cookie would act for B (or be refused out of turn)
+// from a page that shows A. The page says who it's playing as (`as`, its
+// own data-viewer-id); if that isn't who the cookie now belongs to, nothing
+// is acted on and the page is told who the browser is signed in as instead.
+// A signed-out jar counts as a change too (nowSignedInAs: null). The message
+// names only the cookie's own account, never the claimed one, so this can't
+// be used to look up display names by id; the page names itself from
+// data-viewer-name.
+async function identityChangedResponse(c: Context, user: User | undefined): Promise<Response | undefined> {
+  const body = await c.req.parseBody();
+  const claimed = typeof body.as === "string" && body.as !== "" ? Number(body.as) : undefined;
+  if (claimed === undefined || claimed === user?.id) return undefined;
+  return c.json(
+    {
+      error: user
+        ? `This browser is now signed in as ${user.display_name}, in another tab or window. Reload to play as them.`
+        : "This browser is now signed out, in another tab or window. Reload to log in again.",
+      code: "identity_changed",
+      nowSignedInAs: user ? { userId: user.id, displayName: user.display_name } : null,
+    },
+    409,
+  );
+}
+
 function tableIdParam(c: Context): number | undefined {
   const id = Number(c.req.param("id"));
   return Number.isInteger(id) ? id : undefined;
@@ -649,16 +675,19 @@ app.get("/tables/:id/results", (c) => {
 // SSE stream per docs/c9-brief.md Step 3: the caller's full current view on
 // connect, their own view again after any change to the table (sit, leave,
 // start, any action — real or the turn timer's), and a plain comment line
-// every ~20s so a reverse proxy (Fly's, in production) doesn't time out an
+// every SSE_HEARTBEAT_MS so a reverse proxy (Fly's, in production) doesn't time out an
 // otherwise-idle connection. One view-shaped "dirty" flag per connection,
 // not a queue of past events: a client that's behind only ever needs the
-// current state, never a history of what it missed.
+// current state, never a history of what it missed. Each wake (push or
+// heartbeat) also re-checks the session, and ends the stream once it's gone
+// (final brief Step 2).
 const SSE_HEARTBEAT_MS = 10_000;
 
 app.get("/tables/:id/events", (c) => {
   const tableId = tableIdParam(c);
-  const user = currentUser(c);
-  if (!user) return c.json({ error: "Log in first." }, 401);
+  const token = getCookie(c, SESSION_COOKIE);
+  const user = token ? userForSessionToken(token) : undefined;
+  if (!token || !user) return c.json({ error: "Log in first." }, 401);
   if (tableId === undefined || !buildView(tableId, user.id)) return c.notFound();
 
   return streamSSE(c, async (stream) => {
@@ -689,6 +718,12 @@ app.get("/tables/:id/events", (c) => {
       });
       wake = undefined;
       if (stream.aborted || stream.closed) break;
+      // Final brief Step 2: a stream opened under a session that has since
+      // ended (logged out in another tab) closes itself rather than keep
+      // pushing that user's view to a page whose cookie is no longer theirs.
+      // The browser's EventSource then reconnects with whatever the jar holds
+      // now, so the page learns it's someone else (or no one).
+      if (userForSessionToken(token)?.id !== user.id) break;
       if (!dirty) await stream.write(": heartbeat\n\n");
       // if dirty is now true, loop back to the top and send the view instead
     }
@@ -697,9 +732,11 @@ app.get("/tables/:id/events", (c) => {
   });
 });
 
-app.post("/tables/:id/sit", (c) => {
+app.post("/tables/:id/sit", async (c) => {
   const tableId = tableIdParam(c);
   const user = currentUser(c);
+  const identityChanged = await identityChangedResponse(c, user);
+  if (identityChanged) return identityChanged;
   if (!user) return c.json({ error: "Log in first." }, 401);
   if (tableId === undefined) return c.notFound();
   try {
@@ -710,9 +747,11 @@ app.post("/tables/:id/sit", (c) => {
   return c.json(buildView(tableId, user.id));
 });
 
-app.post("/tables/:id/leave", (c) => {
+app.post("/tables/:id/leave", async (c) => {
   const tableId = tableIdParam(c);
   const user = currentUser(c);
+  const identityChanged = await identityChangedResponse(c, user);
+  if (identityChanged) return identityChanged;
   if (!user) return c.json({ error: "Log in first." }, 401);
   if (tableId === undefined) return c.notFound();
   try {
@@ -723,9 +762,11 @@ app.post("/tables/:id/leave", (c) => {
   return c.json(buildView(tableId, user.id));
 });
 
-app.post("/tables/:id/start", (c) => {
+app.post("/tables/:id/start", async (c) => {
   const tableId = tableIdParam(c);
   const user = currentUser(c);
+  const identityChanged = await identityChangedResponse(c, user);
+  if (identityChanged) return identityChanged;
   if (!user) return c.json({ error: "Log in first." }, 401);
   if (tableId === undefined) return c.notFound();
   try {
@@ -737,10 +778,13 @@ app.post("/tables/:id/start", (c) => {
 });
 
 // fold / check / call / bet / raise. bet and raise need a form field
-// "amount"; the others ignore it if present.
+// "amount"; the others ignore it if present. "as" (every poker POST) is the
+// identity guard above.
 app.post("/tables/:id/act", async (c) => {
   const tableId = tableIdParam(c);
   const user = currentUser(c);
+  const identityChanged = await identityChangedResponse(c, user);
+  if (identityChanged) return identityChanged;
   if (!user) return c.json({ error: "Log in first." }, 401);
   if (tableId === undefined) return c.notFound();
 

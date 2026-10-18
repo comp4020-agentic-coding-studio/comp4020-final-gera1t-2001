@@ -90,7 +90,6 @@ function renderTableHtml(view: TableView): string {
     </form>`;
 
   return `
-    <p id="status-message" role="status" aria-live="polite"></p>
     <div class="felt">
       <div class="community">
         <div class="pot">Pot: ${pot}</div>
@@ -109,8 +108,17 @@ function renderTableHtml(view: TableView): string {
 const tableClientScript = String.raw`
 (function () {
   var tableId = document.body.dataset.tableId;
+  var viewerId = Number(document.body.dataset.viewerId);
+  var viewerName = document.body.dataset.viewerName;
   var root = document.getElementById("table-root");
-  var statusEl = null;
+  // Outside #table-root, so a render never wipes it: a message stays until
+  // the player's next action (see post()), not until the next push.
+  var statusEl = document.getElementById("status-message");
+  var bannerEl = document.getElementById("identity-banner");
+  // Set once this window learns the browser is signed in as someone else
+  // (final brief Step 2); only a reload clears it.
+  var identityLost = false;
+  var DISCONNECTED_MESSAGE = "Live updates disconnected — reconnecting...";
 
   var SUITS = { s: ["♠", "black"], h: ["♥", "red"], d: ["♦", "red"], c: ["♣", "black"] };
 
@@ -128,6 +136,11 @@ const tableClientScript = String.raw`
   }
 
   function render(view) {
+    // Once this window has lost its identity, stop painting: a view for
+    // whoever the cookie belongs to now (their hole cards, their seat) has no
+    // place under a banner that says this window is playing as someone else.
+    if (view.you !== viewerId) showIdentityBanner(view.youDisplayName);
+    if (identityLost) return;
     var hand = view.hand;
     var seatByNo = {};
     view.seats.forEach(function (s) { seatByNo[s.seatNo] = s; });
@@ -202,14 +215,13 @@ const tableClientScript = String.raw`
       '<button type="submit">Start hand</button></form>';
 
     root.innerHTML =
-      '<p id="status-message" role="status" aria-live="polite"></p>' +
       '<div class="felt"><div class="community"><div class="pot">Pot: ' + pot + '</div>' +
       '<div class="board">' + (board || "<em>no community cards yet</em>") + "</div></div>" +
       '<ul class="seats">' + seatsHtml + "</ul></div>" +
       turnInfo + actionsHtml + seatControlsHtml;
 
-    statusEl = document.getElementById("status-message");
     wireForms();
+    disableControls();
     updateCountdown(); // paint it now, not up to 250ms later on the next tick
   }
 
@@ -227,13 +239,44 @@ const tableClientScript = String.raw`
   }
 
   function showError(message) {
-    if (statusEl) statusEl.textContent = message;
+    // Once the identity banner is up it says why nothing works; a second
+    // copy of that in the status line is noise.
+    statusEl.textContent = identityLost ? "" : message;
   }
 
-  function post(path, body) {
+  // nowSignedInAs is a display name, or null when the browser is signed out.
+  function showIdentityBanner(nowSignedInAs) {
+    identityLost = true;
+    var playingAs = "<strong>" + esc(viewerName) + "</strong>";
+    bannerEl.querySelector("[data-banner-text]").innerHTML = nowSignedInAs
+      ? "This window is playing as " + playingAs + ", but this browser is now signed in as <strong>" +
+        esc(nowSignedInAs) + "</strong> (another tab or window). Reload to play as " + esc(nowSignedInAs) + "."
+      : "This window is playing as " + playingAs +
+        ", but this browser is now signed out (another tab or window). Reload to log in again.";
+    bannerEl.hidden = false;
+    statusEl.textContent = ""; // e.g. a "reconnecting..." that is no longer true
+    disableControls();
+  }
+
+  function disableControls() {
+    if (!identityLost) return;
+    root.querySelectorAll("button, input").forEach(function (el) { el.disabled = true; });
+  }
+
+  // Every POST says who this page is playing as, so the server can refuse
+  // one whose cookie now belongs to someone else (409 identity_changed)
+  // instead of acting for them.
+  function post(path, fields) {
+    showError(""); // the player's next action is what clears the last message
+    var body = new URLSearchParams(fields || {});
+    body.set("as", String(viewerId));
     return fetch(path, { method: "POST", body: body })
       .then(function (res) {
         return res.json().then(function (data) {
+          if (res.status === 409 && data.code === "identity_changed") {
+            showIdentityBanner(data.nowSignedInAs ? data.nowSignedInAs.displayName : null);
+            throw new Error(data.error);
+          }
           if (!res.ok) throw new Error(data.error || "Something went wrong.");
           return data;
         });
@@ -261,14 +304,17 @@ const tableClientScript = String.raw`
       e.preventDefault();
       var type = e.submitter ? e.submitter.value : "";
       var amount = new FormData(actionForm).get("amount");
-      var body = new URLSearchParams();
-      body.set("type", type);
-      if (amount) body.set("amount", String(amount));
-      post("/tables/" + tableId + "/act", body).then(render).catch(function (err) { showError(err.message); });
+      var fields = { type: type };
+      if (amount) fields.amount = String(amount);
+      post("/tables/" + tableId + "/act", fields).then(render).catch(function (err) { showError(err.message); });
     });
   }
 
   setInterval(updateCountdown, 250);
+
+  document.getElementById("identity-reload").addEventListener("click", function () {
+    location.reload();
+  });
 
   wireForms();
   updateCountdown(); // paint the server-rendered first paint's countdown immediately too
@@ -278,7 +324,25 @@ const tableClientScript = String.raw`
     render(JSON.parse(event.data));
   });
   source.onerror = function () {
-    showError("Live updates disconnected — reconnecting...");
+    // A 401 on reconnect (the server ends a stream whose session is gone)
+    // makes EventSource give up for good rather than retry, so ask once who
+    // this browser is now instead of promising a reconnect that won't come.
+    if (source.readyState === EventSource.CLOSED) {
+      fetch("/tables/" + tableId + "/view").then(function (res) {
+        if (res.status === 401) return showIdentityBanner(null);
+        showError("Live updates stopped. Reload to reconnect.");
+        if (res.ok) return res.json().then(render);
+      }).catch(function () {
+        showError("Live updates stopped. Reload to reconnect.");
+      });
+      return;
+    }
+    showError(DISCONNECTED_MESSAGE);
+  };
+  // Messages otherwise stay until the player's next action, but this one is
+  // about the connection, so the connection coming back clears it.
+  source.onopen = function () {
+    if (statusEl.textContent === DISCONNECTED_MESSAGE) showError("");
   };
 })();
 `;
@@ -309,6 +373,11 @@ const TABLE_STYLE = `
      looking at a real render, not by pnpm check. */
   .actions[hidden], .table-controls[hidden] { display: none; }
   .actions input[type="number"] { width: 6rem; max-width: 100%; }
+  .identity-banner { background: #fff4d6; color: #3a2a00; border: 2px solid #b8860b; border-radius: 8px;
+                     padding: 0.75rem 1rem; margin: 0.5rem 0; display: flex; flex-wrap: wrap; gap: 0.5rem 1rem;
+                     align-items: center; }
+  .identity-banner p { margin: 0; flex: 1 1 20rem; }
+  .identity-banner[hidden] { display: none; }
 `;
 
 export function renderTablePage(view: TableView): string {
@@ -317,10 +386,19 @@ export function renderTablePage(view: TableView): string {
     <main data-table-id="${view.table.id}">
       <h1>${escapeHtml(view.table.name)}</h1>
       <p><a href="/">Home</a></p>
+      <div id="identity-banner" class="identity-banner" role="alert" hidden>
+        <p data-banner-text></p>
+        <button type="button" id="identity-reload">Reload</button>
+      </div>
+      <p id="status-message" role="status" aria-live="polite"></p>
       <div id="table-root">${renderTableHtml(view)}</div>
     </main>
     <script>${tableClientScript}</script>`;
-  // data-table-id lives on <body> (not just <main>) because the inline
-  // script reads it off document.body for simplicity.
-  return page(view.table.name, body).replace("<body>", `<body data-table-id="${view.table.id}">`);
+  // Read off document.body by the inline script. data-viewer-id is who this
+  // page was rendered for; every POST sends it back as "as" (final brief
+  // Step 2), and a view whose "you" differs means the cookie changed hands.
+  return page(view.table.name, body).replace(
+    "<body>",
+    `<body data-table-id="${view.table.id}" data-viewer-id="${view.you ?? ""}" data-viewer-name="${escapeHtml(view.youDisplayName ?? "")}">`,
+  );
 }

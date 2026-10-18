@@ -6,6 +6,7 @@ import { findUserById } from "../accounts.ts";
 import { db } from "../db.ts";
 import type { Action, PublicState } from "./engine.ts";
 import { PokerEngine } from "./engine.ts";
+import { STALE_ACTION_MESSAGE, UNKNOWN_MOVE_MESSAGE, playerMessageForEngineError } from "./messages.ts";
 
 // Owner decision (docs/c9-brief.md): when it's your turn and you do nothing
 // (or disconnect), the server acts for you after a countdown — check if
@@ -64,11 +65,18 @@ export interface TableView {
   // null until the table's first hand is ever dealt.
   hand: PublicState | null;
   turnDeadline: string | null;
+  // table_state.version (0 before the first hand) — what a client or test
+  // compares to tell whether anything was written, not only whether the
+  // public state happens to look the same.
+  version: number;
   // Not persisted — purely a "something just happened" hint for the table
   // page to show ("auto-folded"), cleared the moment a new action replaces
   // it. Lost on restart, which is fine: nothing correctness-bearing reads it.
   lastAction: LastAction | null;
   you: number | null;
+  // The viewer's own display name, seated or not — so a page can say who
+  // this browser is signed in as (final brief Step 2's banner).
+  youDisplayName: string | null;
 }
 
 // In-memory, per table_id, for the same reason as `timers` below: it's a
@@ -168,8 +176,10 @@ export function buildView(tableId: number, viewerUserId: number | undefined): Ta
     seats,
     hand,
     turnDeadline: stateRow?.turn_deadline ?? null,
+    version: stateRow?.version ?? 0,
     lastAction: lastActionByTable.get(tableId) ?? null,
     you: viewerUserId ?? null,
+    youDisplayName: viewerUserId !== undefined ? (findUserById(viewerUserId)?.display_name ?? null) : null,
   };
 }
 
@@ -369,7 +379,7 @@ function buildAction(rawType: string, playerId: string, amount: number | undefin
       }
       return { type: "RAISE", playerId, amount } as Action;
     default:
-      throw new PokerError(`Unknown action: "${rawType}".`);
+      throw new PokerError(UNKNOWN_MOVE_MESSAGE);
   }
 }
 
@@ -406,10 +416,13 @@ export function prepareAction(
   const action = buildAction(rawType, playerId, amount);
   // engine.validate() checks whose turn it is as part of ordinary
   // validation (NOT_YOUR_TURN is one of its own error codes) — out-of-turn
-  // and illegal actions are both rejected right here, with the engine's own
-  // message, before anything is mutated or written.
+  // and illegal actions are both rejected right here, before anything is
+  // mutated or written — with a player-readable message for the engine's
+  // error code (./messages.ts), never the engine's own message text.
   const result = engine.validate(action);
-  if (!result.valid) throw new PokerError(result.error);
+  if (!result.valid) {
+    throw new PokerError(playerMessageForEngineError(result.code, engine.state));
+  }
 
   // actionTo, read here before engine.act() moves it, is exactly the seat
   // that's about to act — i.e. this action's seat. Captured directly rather
@@ -484,9 +497,8 @@ export function commitPreparedAction(prepared: PreparedAction): void {
   })();
 
   if (!applied) {
-    throw new StaleActionError(
-      "This table changed before the action could be saved (lost a race with another action or the turn timer); nothing was applied.",
-    );
+    // Lost a race with another action or the turn timer; nothing was applied.
+    throw new StaleActionError(STALE_ACTION_MESSAGE);
   }
 
   // actingSeat/actionType, not actionHistory's last entry: when a fold ends
