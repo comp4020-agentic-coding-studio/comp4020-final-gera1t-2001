@@ -8,7 +8,8 @@
     "typecheck": "tsc --noEmit",
     "check": "pnpm typecheck && pnpm test",
     "check:evidence": "node scripts/check-evidence.ts",
-    "test": "vitest run"
+    "test": "vitest run",
+    "probe:latency": "node scripts/latency-probe.ts"
   },
   "devDependencies": {
     "@types/better-sqlite3": "^9.6.0",
