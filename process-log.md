@@ -1068,3 +1068,31 @@ either account is still seated at the end, print it loudly and exit
 non-zero... Run both against the local app again, plus one run with a
 third local account seated and never acting... Commit, log, then push
 (this step is approved once these pass). Stop."
+
+## 2026-10-19 — [routine]
+
+**What happened:** Committed final brief Step 2's red test first:
+`spec/poker.test.ts` test 9 (localhost only) reproduces cause 1 over HTTP.
+One cookie jar opens A's SSE stream and sits A, logs out, registers and
+sits B, and deals until A is to act. A POST to `/act` claiming `as=<A>` but
+carrying B's cookie must get a 409 `identity_changed` with `nowSignedInAs`,
+and must leave `table_state.version` unchanged.
+
+**What I did instead of the obvious thing:** The first red run failed on a
+precondition: `version` wasn't in the view yet, so the test failed before it
+ever reached the claim under test. I moved the `typeof before.version ===
+"number"` check after the 409 assertions, so the red shows the real bug,
+and kept it so `undefined === undefined` can't pass the version comparison
+later.
+
+**How I knew it was right:** Red for the right reason, against a local app:
+`expected 400 to be 409` (the engine's out-of-turn rejection, because B's
+cookie acted as B). The other 24 tests stayed green in `pnpm check`, and
+`seats` in `data/dev.sqlite3` was empty after the run (the cleanup logs A
+back in to get a live cookie for A's seat).
+
+**Citation:** `bb338e0` (`spec/poker.test.ts`).
+
+**Curated prompt:** "Read CLAUDE.md, docs/final-brief.md and the latest
+entries in process-log.md. Do Step 2 only. Report what you verified and
+what you didn't, then stop and wait for me."
