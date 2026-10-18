@@ -949,3 +949,53 @@ changes mixed in.
 **Curated prompt:** "Read CLAUDE.md, docs/final-brief.md and the latest
 entries in process-log.md. First commit docs/final-brief.md, docs/design/
 and docs/evidence/ as the brief says, then do Step 1 only."
+
+## 2026-10-19 — [routine]
+
+**What happened:** Built `scripts/latency-probe.ts` (`pnpm probe:latency`),
+final brief Step 1's harness: two sessions with separate cookie jars (A and
+B), B's SSE stream watched while A acts N times (check/call, or starts a
+new hand once one ends), reporting per-action delivery time
+(median/p95/max) and the gap between every message on B's stream
+(heartbeats included), plus a count of any action with no event within
+5 s. It reads `PROBE_A_USER`/`PASS`/`PROBE_B_USER`/`PASS` from env and
+never registers accounts, so it's safe to point at production once the
+owner supplies real credentials there.
+
+**What I did instead of the obvious thing:** `leave()` (`src/poker/table.ts`)
+rejects a seat still dealt into a hand in progress, which the first version
+of the probe hit: it called `leave()` for both sessions right after its
+last timed action, even when that action had left a hand mid-street, so
+both sessions missed the error silently (`.catch(() => undefined)`) and
+stayed seated — confirmed by querying `data/dev.sqlite3` directly after a
+run and finding both probe seats still occupied. Added
+`finishAnyHandInProgress()`, mirroring `spec/poker.test.ts`'s own
+`cleanupTable()`: fold whoever's turn it is down to a finished hand before
+either session tries to leave, so "it leaves both seats at the end"
+(the brief's own requirement) is actually true rather than only true when
+the last action happened to end the hand.
+
+**How I knew it was right:** Ran `pnpm probe:latency` against a local app
+(`TURN_TIMEOUT_SECONDS=30`, two freshly-registered local-only accounts,
+`PROBE_ACTIONS=15`) and queried `seats` directly before and after: occupied
+beforehand (from the prior buggy run), empty immediately after this run.
+Delivery was 2-10ms per action (median 4ms, p95 10ms, max 10ms) and stream
+gaps 5-22ms, all heartbeats and pushes, 0/15 missed. Proved the probe isn't
+vacuous per the brief: temporarily made `notifyTable()` (`src/poker/table.ts`)
+return immediately, re-ran the probe (3 actions), confirmed all 3 reported
+"NO EVENT within 5000ms" with no other effect, then reverted — confirmed by
+`git diff` showing no residual change to `src/poker/table.ts`. `pnpm check`
+green (4 files, 24/24 tests) against the same running local app afterward.
+
+**Not yet run:** against production — that needs the owner's real
+credentials, which this script deliberately never generates or stores
+itself; the exact command to hand the owner is `APP_URL=<production URL>
+PROBE_A_USER=... PROBE_A_PASS=... PROBE_B_USER=... PROBE_B_PASS=...
+pnpm probe:latency`.
+
+**Citation:** `2698608` (`scripts/latency-probe.ts`, `package.json`).
+
+**Curated prompt:** "Read CLAUDE.md, docs/final-brief.md and the latest
+entries in process-log.md. First commit docs/final-brief.md, docs/design/
+and docs/evidence/ as the brief says, then do Step 1 only. Report what you
+verified and what you didn't, then stop and wait for me."
