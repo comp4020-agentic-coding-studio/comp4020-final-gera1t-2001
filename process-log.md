@@ -924,3 +924,28 @@ visitor.
 **Curated prompt:** "The home page lost its link to the README. Add
 'About' to the nav, linking to /readme/, for everyone. pnpm check green,
 commit, log, push, confirm deploy. Stop."
+
+## 2026-10-19 — [routine]
+
+**What happened:** Added the final-project handoff — `docs/final-brief.md`,
+`docs/design/` (table, login and register mockups with 1920/390
+screenshots, shared `auth.css`) and `docs/evidence/` (pre-brief production
+timeline, two repro scripts, before screenshots) — as a single commit, per
+the brief's own instruction to commit all three before starting Step 1.
+
+**What I did instead of the obvious thing:** Nothing non-obvious here —
+committed exactly the files the brief named, unmodified, with no attempt
+to act on their contents yet.
+
+**How I knew it was right:** `git status` before committing showed only
+these three paths as untracked against an otherwise clean tree; `git show
+--stat` after confirmed all 17 files (16 under docs/design and
+docs/evidence plus final-brief.md) landed in one commit with no other
+changes mixed in.
+
+**Citation:** `9b7daa2` (`docs/final-brief.md`, `docs/design/*`,
+`docs/evidence/*`).
+
+**Curated prompt:** "Read CLAUDE.md, docs/final-brief.md and the latest
+entries in process-log.md. First commit docs/final-brief.md, docs/design/
+and docs/evidence/ as the brief says, then do Step 1 only."
