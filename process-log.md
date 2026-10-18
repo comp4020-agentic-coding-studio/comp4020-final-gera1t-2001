@@ -999,3 +999,72 @@ pnpm probe:latency`.
 entries in process-log.md. First commit docs/final-brief.md, docs/design/
 and docs/evidence/ as the brief says, then do Step 1 only. Report what you
 verified and what you didn't, then stop and wait for me."
+
+## 2026-10-19 — [harness]
+
+**What happened:** The owner reviewed Step 1's probe (`2698608`) and
+rejected it twice over before approving: (1) the stream-health check never
+ran long enough to see a single heartbeat, so a genuinely dead stream
+would have reported "healthy" by default; (2) `leave()` rejects a seat
+still dealt into a hand, and with other real players seated a hand only
+ends once every one of them has acted — not something the probe's own two
+accounts can force — so a run on a table with other players would silently
+strand both probe seats forever.
+
+**What I did instead of the obvious thing:** For (1), rather than just
+lengthening the existing action-loop's incidental gap measurements, added
+a dedicated phase: fold down to a finished hand, *then* hold B's stream
+idle for `max(25s, HEARTBEAT_MS * 2.5)` and report the max gap, flagging
+`STALL` above 1.5x the heartbeat. Getting the ordering right took two
+tries: the first version held the idle window before confirming the hand
+had ended, and a real in-progress street transition (not a heartbeat)
+landed inside it — caught with `PROBE_DEBUG=1` logging `actionTo`/`street`
+per message, which showed two "idle" messages 4ms apart quoting FLOP/TURN,
+not two heartbeat comments ~10s apart. Separately, the SSE reader itself
+had to be rebuilt as a continuously-running background pump (mirroring
+`spec/poker.test.ts`'s own `connectSse`, not invented fresh) rather than
+the lazily-pulled async generator it started as: the generator only read
+off the socket while something was actively calling `.next()` on it, so
+holding the stream "idle" on purpose left real messages sitting unread
+and gave them a late, bunched-up timestamp whenever the generator was
+next resumed — caught the same way, seeing several heartbeats logged
+back-to-back with ~0ms gaps right after what should have been a clean
+10s-spaced idle window.
+
+For (2), added `waitUntilNoHandRunning()`: polls (up to 120s) folding only
+A's and B's own turns (never acting for a seat the probe doesn't own —
+that resolves only via the server's own timer) until no hand is running,
+then leaves both. Prints the count of other seated players up front with
+a timing-inflation warning, and now treats "still seated after cleanup"
+as a loud, `process.exitCode = 1` failure rather than a silently swallowed
+`.catch(() => undefined)` the way the first version of `leave()` did.
+
+**How I knew it was right:** Non-vacuousness, both fixes, against a local
+app (`TURN_TIMEOUT_SECONDS=30`):
+- Heartbeat: ran clean (`PROBE_ACTIONS=10`) — idle hold saw 6 messages
+  over 25s, max gap 10001ms against a 10000ms heartbeat, no STALL. Then
+  temporarily made `src/server.ts`'s heartbeat write a no-op
+  (`if (false && !dirty) ...`), re-ran (`PROBE_ACTIONS=3`) — idle hold saw
+  0 messages, correctly reported `STALL`, then reverted (`git diff
+  src/server.ts` empty before committing).
+- Leave-with-others: registered a third local account (`probe_c`), sat it
+  down, and ran the probe with A and B joining it. It reported "1 other
+  player(s) already seated" up front, ran 6 timed actions (median 5ms),
+  and both A and B left successfully afterward (`seats` in
+  `data/dev.sqlite3` showed only `probe_c` remaining, confirmed via direct
+  SQL query before and after). `probe_c` was then left manually via a
+  direct POST.
+- `pnpm check` green (4 files, 24/24 tests) against the same local app
+  throughout.
+
+**Citation:** `c4412a4` (`scripts/latency-probe.ts`).
+
+**Curated prompt:** "Before I approve Step 1, two fixes to the probe, same
+step: 1. Stream health didn't measure anything... hold B's stream idle
+for at least 25s... Flag any gap over 1.5x the heartbeat as STALL. Prove
+it... 2. Leaving can fail when other players are at the table... wait
+(poll the view, up to 120s) until no hand is running, then leave. If
+either account is still seated at the end, print it loudly and exit
+non-zero... Run both against the local app again, plus one run with a
+third local account seated and never acting... Commit, log, then push
+(this step is approved once these pass). Stop."
