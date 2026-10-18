@@ -1159,3 +1159,41 @@ through the banner was not checked.
 
 **Curated prompt:** "Do Step 2 only. Report what you verified and what you
 didn't, then stop and wait for me."
+
+## 2026-10-19 — [routine] (no commit)
+
+**What happened:** The owner's approval checks for Step 2 (`d5a09d8`) before
+pushing: the normal two-player case with `as=` set, the Step 1 probe as a
+regression check, and keyboard access to the banner. All passed with no
+code change.
+
+**What I did instead of the obvious thing:** The first 390×844 run of the
+two-player check stalled with "nobody to act". Rather than reading that as
+an app bug, I checked `seats` and `table_state`. A player left over from my
+own earlier aborted run (its `leave` had returned 400 mid-hand) was still in
+seat 0, so the hand was 3-handed and waiting on a seat my script doesn't
+control. I stood that seat up and re-ran on an empty table.
+
+**How I knew it was right:**
+- Two separate Chromium contexts (separate cookie jars), real buttons, at
+  1920×1080 and 390×844. Both sat, one hand was played to showdown (winner
+  shown, both hands revealed) and one to a fold, then both left. 15 POSTs
+  per run, all 200 and all carrying `as=`. Every action reached the other
+  page in 23–54 ms. No banner and no status message on either side;
+  `scrollWidth - innerWidth` was 0.
+- `pnpm probe:latency` against the local app (`PROBE_ACTIONS=20`): delivery
+  median 3 ms, p95 5 ms, max 6 ms, 0/20 missed. Idle-hold max gap 10010 ms
+  against a 10000 ms heartbeat, no STALL. Step 1's were median 4–5 ms,
+  max 10001 ms. Both seats left; exit 0.
+- At 390×844 the banner was triggered by keyboard only (Enter on a focused
+  Leave). Tab order was Home → Reload, then it wrapped, skipping the
+  disabled controls. Reload showed a visible focus ring in the screenshot,
+  and Enter on it reloaded the window as the new account with no banner.
+
+**Citation:** `d5a09d8` (unchanged); `scripts/latency-probe.ts`.
+
+**Curated prompt:** "Step 2 is approved once these pass, then push: 1. Two
+separate browser contexts... sit both, deal, play one hand to showdown and
+one to a fold. No 409, no banner, every action shows on the other side.
+2. Run the Step 1 probe against the local app... 3. Tab through the banner
+and its Reload button at 390x844."
