@@ -98,10 +98,10 @@ interface TableView {
   turnDeadline: string | null;
   lastAction: LastAction | null;
   you: number | null;
+  version: number;
 }
 
-async function registerAndSit(): Promise<Player> {
-  const username = randomUsername();
+async function register(username: string): Promise<string> {
   const body = new URLSearchParams({
     username,
     password: VALID_PASSWORD,
@@ -115,6 +115,20 @@ async function registerAndSit(): Promise<Player> {
   const res = await fetch(new URL("/register", baseUrl), { method: "POST", body, redirect: "manual" });
   const cookie = sessionCookieFrom(res);
   if (!cookie) throw new Error(`register failed for ${username}: ${res.status}`);
+  return cookie;
+}
+
+async function logIn(username: string): Promise<string> {
+  const body = new URLSearchParams({ username, password: VALID_PASSWORD });
+  const res = await fetch(new URL("/login", baseUrl), { method: "POST", body, redirect: "manual" });
+  const cookie = sessionCookieFrom(res);
+  if (!cookie) throw new Error(`log in failed for ${username}: ${res.status}`);
+  return cookie;
+}
+
+async function registerAndSit(): Promise<Player> {
+  const username = randomUsername();
+  const cookie = await register(username);
 
   const sitRes = await fetch(new URL(`/tables/${TABLE_ID}/sit`, baseUrl), { method: "POST", headers: { cookie } });
   const view = (await sitRes.json()) as TableView & { error?: string };
@@ -530,4 +544,78 @@ describe.skipIf(!isLocal)("poker (writes test data — local only)", () => {
       expect(result.lastAction).toMatchObject({ seat: actor2.seatNo, type: "CALL", auto: false });
     },
   );
+});
+
+// docs/final-brief.md Step 2, cause 1: one browser profile (one cookie jar),
+// two accounts. Kept outside the describe above so its beforeEach doesn't
+// seat two extra players at the table this test needs to itself.
+describe.skipIf(!isLocal)("one browser, two accounts (writes test data — local only)", () => {
+  const seated: Player[] = [];
+
+  afterEach(async () => {
+    if (seated.length > 0) await cleanupTable(seated);
+    seated.length = 0;
+  });
+
+  it("9. a POST from A's page carrying B's cookie gets a 409 identity_changed and changes nothing", async () => {
+    const usernameA = randomUsername();
+    const usernameB = randomUsername();
+
+    // The jar's one session cookie, as it changes over the scenario.
+    let jar = await register(usernameA);
+    const sse = connectSse(jar);
+    try {
+      const { view: aFirstView } = await sse.nextView(() => true, 2000);
+      const userIdA = aFirstView.you!;
+      const sitA = await fetch(new URL(`/tables/${TABLE_ID}/sit`, baseUrl), { method: "POST", headers: { cookie: jar } });
+      expect(sitA.status).toBe(200);
+      const seatA = ((await sitA.json()) as TableView).seats.find((s) => s.userId === userIdA)!.seatNo;
+
+      // Another window in the same browser: log out, register B (which signs
+      // the jar in as B), sit B down.
+      await fetch(new URL("/logout", baseUrl), { method: "POST", headers: { cookie: jar }, redirect: "manual" });
+      jar = await register(usernameB);
+      const sitB = await fetch(new URL(`/tables/${TABLE_ID}/sit`, baseUrl), { method: "POST", headers: { cookie: jar } });
+      expect(sitB.status).toBe(200);
+      const sitBView = (await sitB.json()) as TableView;
+      const userIdB = sitBView.you!;
+      const seatB = sitBView.seats.find((s) => s.userId === userIdB)!.seatNo;
+
+      // Cleanup needs a live cookie for each seat; A's was ended by the logout.
+      seated.push(
+        { username: usernameA, userId: userIdA, cookie: await logIn(usernameA), seatNo: seatA },
+        { username: usernameB, userId: userIdB, cookie: jar, seatNo: seatB },
+      );
+
+      // Get to A to act. Heads-up preflop, if B (the button) acts first, B's
+      // call hands the action to A's big-blind option.
+      let before = await startHand(jar);
+      if (before.hand!.actionTo === seatB) before = await act(jar, "call");
+      expect(before.hand!.actionTo).toBe(seatA);
+
+      // A's page acts: it says it's A (as=), but the jar now holds B's cookie.
+      const res = await fetch(new URL(`/tables/${TABLE_ID}/act`, baseUrl), {
+        method: "POST",
+        headers: { cookie: jar },
+        body: new URLSearchParams({ type: "check", as: String(userIdA) }),
+      });
+      expect(res.status).toBe(409);
+      const body = (await res.json()) as {
+        error?: string;
+        code?: string;
+        nowSignedInAs?: { userId: number; displayName: string };
+      };
+      expect(body.code).toBe("identity_changed");
+      expect(body.error).toBeTruthy();
+      expect(body.nowSignedInAs?.userId).toBe(userIdB);
+
+      // A number on both sides, so undefined === undefined can't pass this.
+      const after = await getView(jar);
+      expect(typeof before.version).toBe("number");
+      expect(after.version).toBe(before.version);
+      expect(after.hand).toEqual(before.hand);
+    } finally {
+      sse.close();
+    }
+  });
 });
