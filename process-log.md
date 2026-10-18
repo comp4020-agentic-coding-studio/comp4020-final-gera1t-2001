@@ -1096,3 +1096,66 @@ back in to get a live cookie for A's seat).
 **Curated prompt:** "Read CLAUDE.md, docs/final-brief.md and the latest
 entries in process-log.md. Do Step 2 only. Report what you verified and
 what you didn't, then stop and wait for me."
+
+## 2026-10-19 — [judgement]
+
+**What happened:** Fixed final brief Step 2 (test 9 red → green). All four
+poker POST routes now refuse an `as` that doesn't match the cookie with a
+409 `identity_changed`. The page sends `as`, shows a banner and stops on
+that 409 or on a view whose `you` changed. The SSE stream ends itself once
+its session is gone. Engine rejections become plain messages
+(`src/poker/messages.ts`), and the status line survives renders.
+
+**What I did instead of the obvious thing:** `messages.ts` keys on the
+engine's error `code` (`engine.validate()` returns it:
+`@pokertools/engine/dist/engine/poker-engine.js` `return { valid: false,
+error: message, code }`), not on regexes over the message text. The text
+embeds internal ids ("Player 2 attempted to act, but action is on seat 0")
+and could change in any patch release. Raise/bet minimums read
+`state.minRaise`/`state.bigBlind`, the same fields `actions/validation.js`
+checks. The first browser run of the evidence repro also showed that
+"banner on 409" alone isn't enough: B's sit push wakes A's stream, the new
+session check ends it, and A's page sits stale through Chromium's ~3 s
+reconnect. The reconnect itself (now with B's cookie) delivers a view whose
+`you` differs, so the view path is what catches it when A never clicks.
+Both paths were then checked separately. After an Opus review, three more
+changes: the window stops painting views once its identity is lost
+(otherwise A's window showed B's hole cards under a banner saying "playing
+as A"); the 409 text no longer names the claimed account (a signed-out POST
+with `as=1..N` would otherwise read every display name); and a stale
+"reconnecting..." line is cleared when the banner appears.
+
+**How I knew it was right:**
+- `pnpm check` green, 4 files and 25/25 tests, against a local app;
+  test 9 had been red as `expected 400 to be 409` at `bb338e0`.
+- Real headless Chromium, one shared browser context (the evidence repro's
+  setup), at 1920×1080 and 390×844. *post path:* A's Leave sent `as=<A>`
+  and got a 409, `version` unchanged (e.g. 352 → 352). *push path:* B sat
+  and dealt, and the banner appeared once A's stream reconnected.
+  *signed-out path:* the "now signed out" banner appeared. In all six runs
+  every table control was disabled, Reload worked and the window became B,
+  and `scrollWidth - innerWidth` was 0. Screenshots inspected.
+- A status message ("There's a bet to you, so you can't check…") survived
+  a push (a third player sitting) and cleared on the next action (Call).
+- SSE close: a stream whose session was logged out ended at 10.0 s (the
+  next heartbeat). A control run with no logout stayed open past 22 s, with
+  heartbeats at 10 s and 20 s.
+- Messages over HTTP: out of turn → "It's not your turn."; call with
+  nothing owed → "Nothing to call. Check instead."; an unknown type falls
+  back; `as` equal to the cookie's user still acts (200).
+- Hono's second `parseBody` call reuses the cache:
+  `hono/dist/utils/body.js` `if (!isRawRequest(request) &&
+  request.bodyCache.formData) return convertFormDataToBodyData(await
+  request.bodyCache.formData, options);`.
+
+**Not checked:** production (not pushed; the brief pushes only after owner
+approval). Two real separate browser profiles were not tried, only one
+shared context, which is the case this step is about. Keyboard tab order
+through the banner was not checked.
+
+**Citation:** `d5a09d8` (`src/poker/messages.ts`, `src/poker/page.ts`,
+`src/poker/table.ts`, `src/server.ts`); `spec/poker.test.ts` test 9 red at
+`bb338e0` → green at `d5a09d8`.
+
+**Curated prompt:** "Do Step 2 only. Report what you verified and what you
+didn't, then stop and wait for me."
