@@ -1,0 +1,327 @@
+<!doctype html>
+<html lang="en-AU">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>House Game — table mockup</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Atkinson+Hyperlegible+Next:wght@400;600;700&family=Young+Serif&display=swap" rel="stylesheet" />
+<style>
+/* ---- Tokens ------------------------------------------------------------
+   A home game at night: a dark room, one pendant lamp, a lit felt table.
+   Brass is reserved for "now" (whose turn, the dealer button, your seat);
+   card red is only ever a suit colour. */
+:root {
+  --room: #23262b;        /* the room around the table */
+  --room-2: #2c3036;      /* raised surfaces in the room: header, dock */
+  --line: #3a3f46;        /* hairlines on room surfaces */
+  --text: #ebe8e2;        /* text on the room */
+  --muted: #a1a7ae;       /* secondary text on the room */
+  --felt: #1d5a44;        /* table baize at the edge */
+  --felt-lit: #2f7d5e;    /* baize under the lamp */
+  --rail: #4a3022;        /* walnut rail */
+  --rail-hi: #6b4631;
+  --card: #fbfaf6;        /* card stock, also form "paper" */
+  --ink: #1c1e21;         /* black suits, text on paper */
+  --red: #c0302a;         /* red suits */
+  --brass: #e2b24f;       /* now: turn ring, dealer button, you */
+  --brass-ink: #2a1f08;
+  --ok: #6fcf97;
+  --serif: "Young Serif", Georgia, serif;
+  --sans: "Atkinson Hyperlegible Next", "Atkinson Hyperlegible", system-ui, sans-serif;
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; }
+body {
+  background: var(--room);
+  color: var(--text);
+  font: 16px/1.5 var(--sans);
+  font-variant-numeric: tabular-nums;
+  min-height: 100vh;
+}
+:focus-visible { outline: 3px solid var(--brass); outline-offset: 2px; }
+
+/* ---- Header ---- */
+.site-head {
+  display: flex; align-items: center; gap: 1rem; flex-wrap: wrap;
+  padding: .75rem clamp(1rem, 3vw, 2rem);
+  border-bottom: 1px solid var(--line);
+}
+.wordmark { font: 1.5rem/1 var(--serif); color: var(--text); text-decoration: none; }
+.site-nav { display: flex; gap: 1.25rem; margin-left: auto; align-items: center; }
+.site-nav a { color: var(--muted); text-decoration: none; }
+.site-nav a:hover, .site-nav a[aria-current="page"] { color: var(--text); }
+.conn { display: inline-flex; align-items: center; gap: .4rem; font-size: .875rem; color: var(--muted); }
+.conn::before { content: ""; width: .55rem; height: .55rem; border-radius: 50%; background: var(--ok); }
+.conn[data-state="reconnecting"]::before { background: var(--brass); }
+.conn[data-state="offline"]::before { background: var(--red); }
+
+/* ---- The table ---- */
+.stage { padding: clamp(1rem, 3vw, 2.5rem) clamp(1rem, 3vw, 2rem) 0; }
+.table {
+  position: relative;
+  max-width: 1040px; margin: 0 auto;
+  aspect-ratio: 2.05 / 1;
+  border-radius: 999px;
+  /* the lamp: a pool of light in the middle of the felt */
+  background:
+    radial-gradient(ellipse 55% 60% at 50% 46%, var(--felt-lit), var(--felt) 70%);
+  box-shadow:
+    0 0 0 14px var(--rail),
+    0 0 0 16px var(--rail-hi),
+    0 30px 80px rgba(0,0,0,.45);
+  margin-block: 56px 72px; /* room for seats that sit on the rail */
+}
+.center {
+  position: absolute; left: 50%; top: 46%; transform: translate(-50%, -50%);
+  display: grid; justify-items: center; gap: .6rem; text-align: center;
+}
+.pot { font: 1.05rem var(--sans); color: #e9f3ee; }
+.pot strong { font: 1.6rem/1 var(--serif); color: #fff; margin-left: .35rem; }
+.street { font-size: .85rem; color: #bfe0d1; }
+.board { display: flex; gap: .45rem; }
+
+/* ---- Cards ---- */
+.card {
+  --w: 3.4rem;
+  width: var(--w); aspect-ratio: 5 / 7;
+  background: var(--card); color: var(--ink);
+  border-radius: calc(var(--w) * .12);
+  box-shadow: 0 2px 0 rgba(0,0,0,.15), 0 6px 14px rgba(0,0,0,.25);
+  position: relative; display: grid; place-items: center;
+  font-family: var(--serif);
+}
+.card.red { color: var(--red); }
+.card .idx { position: absolute; left: 12%; top: 6%; line-height: .95; text-align: center; font-size: calc(var(--w) * .34); }
+.card .idx span { display: block; font-size: .8em; }
+.card .pip { font-size: calc(var(--w) * .62); margin-top: 18%; }
+.card.slot { background: transparent; box-shadow: none; border: 2px dashed rgba(255,255,255,.18); }
+.card.back {
+  background:
+    repeating-linear-gradient(45deg, transparent 0 5px, rgba(255,255,255,.14) 5px 6px),
+    repeating-linear-gradient(-45deg, transparent 0 5px, rgba(255,255,255,.14) 5px 6px),
+    #8a2a25;
+  border: 3px solid var(--card);
+}
+.card.sm { --w: 2.1rem; }
+.card.sm .pip { display: none; }
+.card.sm .idx { position: static; font-size: .95rem; }
+.card.lg { --w: 4.6rem; }
+
+/* ---- Seats ----
+   Six fixed slots around the oval; slot 0 is always the viewer, so you
+   sit at the bottom wherever your real seat number is. */
+.seat {
+  position: absolute; left: var(--x); top: var(--y);
+  transform: translate(-50%, -50%);
+  display: grid; justify-items: center; gap: .25rem;
+  width: 8.5rem; text-align: center;
+}
+.s0 { --x: 50%; --y: 100%; --bx: 0; --by: -5.2rem; }
+.s1 { --x: 9%;  --y: 82%;  --bx: 5rem;  --by: -2.6rem; }
+.s2 { --x: 9%;  --y: 18%;  --bx: 5rem;  --by: 2.6rem; }
+.s3 { --x: 50%; --y: 0%;   --bx: 0;     --by: 5rem; }
+.s4 { --x: 91%; --y: 18%;  --bx: -5rem; --by: 2.6rem; }
+.s5 { --x: 91%; --y: 82%;  --bx: -5rem; --by: -2.6rem; }
+.avatar {
+  --p: 0; /* 0..1 of the turn countdown remaining */
+  width: 3.6rem; height: 3.6rem; border-radius: 50%;
+  display: grid; place-items: center;
+  font: 1.45rem/1 var(--serif); color: var(--text);
+  background: var(--room-2);
+  border: 3px solid var(--line);
+  position: relative;
+}
+.seat.turn .avatar {
+  border-color: transparent;
+  background:
+    linear-gradient(var(--room-2), var(--room-2)) padding-box,
+    conic-gradient(var(--brass) calc(var(--p) * 1turn), rgba(255,255,255,.12) 0) border-box;
+}
+.seat.you .avatar { color: var(--brass); }
+.name { font-weight: 600; line-height: 1.2; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.stack { font-size: .875rem; color: var(--muted); }
+.plate { background: rgba(20,22,25,.82); border-radius: .6rem; padding: .3rem .6rem; max-width: 100%; min-width: 0; overflow: hidden; }
+.seat .hole { display: flex; gap: .2rem; margin-bottom: -.2rem; }
+.seat.folded { opacity: .45; }
+.dealer {
+  position: absolute; right: -.35rem; top: -.35rem;
+  width: 1.45rem; height: 1.45rem; border-radius: 50%;
+  background: var(--brass); color: var(--brass-ink);
+  font: 700 .8rem/1.45rem var(--sans); text-align: center;
+  box-shadow: 0 2px 4px rgba(0,0,0,.4);
+}
+.bet {
+  position: absolute; left: 50%; top: 50%;
+  transform: translate(calc(-50% + var(--bx)), calc(-50% + var(--by)));
+  display: inline-flex; align-items: center; gap: .35rem;
+  font-weight: 700; font-size: .9rem; color: #fff; white-space: nowrap;
+}
+.bet::before {
+  content: ""; width: 1rem; height: 1rem; border-radius: 50%;
+  background: radial-gradient(circle, #fff 0 22%, var(--red) 23% 60%, #fff 61% 70%, var(--red) 71%);
+  box-shadow: 0 1px 2px rgba(0,0,0,.5);
+}
+.said {
+  position: absolute; bottom: calc(100% + .2rem);
+  background: var(--card); color: var(--ink);
+  font-size: .8rem; font-weight: 600; padding: .1rem .5rem; border-radius: 999px;
+  white-space: nowrap;
+}
+.said.auto { background: var(--brass); color: var(--brass-ink); }
+.seat.empty .avatar { border-style: dashed; color: var(--muted); font: .8rem var(--sans); }
+
+/* ---- Action dock ---- */
+.dock {
+  max-width: 1040px; margin: 0 auto 2rem;
+  background: var(--room-2); border: 1px solid var(--line); border-radius: 1rem;
+  padding: 1rem 1.25rem;
+  display: grid; grid-template-columns: auto 1fr; gap: 1rem 1.5rem; align-items: center;
+}
+.dock .mine { display: flex; gap: .4rem; }
+.prompt { font-size: 1.05rem; }
+.prompt strong { font-family: var(--serif); font-weight: 400; font-size: 1.25rem; }
+.prompt .clock { color: var(--brass); font-weight: 700; margin-left: .35rem; }
+.actions { display: flex; flex-wrap: wrap; gap: .6rem; align-items: center; grid-column: 2; }
+.btn {
+  font: 700 1rem var(--sans); border-radius: .65rem; padding: .7rem 1.2rem;
+  border: 2px solid transparent; cursor: pointer; min-height: 3rem;
+}
+.btn.fold { background: transparent; color: var(--text); border-color: var(--line); }
+.btn.call { background: var(--card); color: var(--ink); }
+.btn.raise { background: var(--brass); color: var(--brass-ink); }
+.raise-box { display: flex; align-items: center; gap: .4rem; flex-wrap: wrap; }
+.raise-box input {
+  width: 6.5rem; font: 700 1rem var(--sans); padding: .6rem .7rem; min-height: 3rem;
+  border-radius: .65rem; border: 2px solid var(--line); background: var(--room); color: var(--text);
+}
+.chip-btn {
+  font: 600 .875rem var(--sans); padding: .45rem .7rem; border-radius: 999px;
+  background: transparent; border: 1px solid var(--line); color: var(--muted); cursor: pointer;
+}
+.chip-btn:hover { color: var(--text); border-color: var(--muted); }
+.banner {
+  max-width: 1040px; margin: 1rem auto 0; padding: .8rem 1.1rem; border-radius: .8rem;
+  background: var(--card); color: var(--ink); display: flex; gap: 1rem; align-items: center; flex-wrap: wrap;
+}
+.banner strong { font-family: var(--serif); font-weight: 400; }
+.banner button { margin-left: auto; }
+
+/* ---- Phone: the oval stands up, the dock pins to the bottom ---- */
+@media (max-width: 640px) {
+  .site-nav { gap: .9rem; font-size: .9rem; margin-left: 0; width: 100%; }
+  .stage { padding-inline: 2.3rem; }
+  .table { aspect-ratio: 0.7 / 1; margin-block: 44px 64px; box-shadow: 0 0 0 10px var(--rail), 0 0 0 12px var(--rail-hi), 0 20px 50px rgba(0,0,0,.45); }
+  .center { top: 47%; }
+  .card { --w: 2.55rem; }
+  .card.sm { --w: 1.7rem; }
+  .card.sm .idx { font-size: .78rem; }
+  .board { gap: .3rem; }
+  .seat { width: 4.9rem; }
+  .avatar { width: 2.8rem; height: 2.8rem; font-size: 1.15rem; }
+  .name { font-size: .85rem; }
+  .stack { font-size: .78rem; }
+  .s0 { --x: 50%; --y: 100%; --bx: 0; --by: -4.1rem; }
+  .s1 { --x: 4%;  --y: 74%;  --bx: 3.6rem; --by: -1.2rem; }
+  .s2 { --x: 4%;  --y: 30%;  --bx: 3.6rem; --by: 1.2rem; }
+  .s3 { --x: 50%; --y: 0%;   --bx: 0; --by: 4rem; }
+  .s4 { --x: 96%; --y: 30%;  --bx: -3.6rem; --by: 1.2rem; }
+  .s5 { --x: 96%; --y: 74%;  --bx: -3.6rem; --by: -1.2rem; }
+  .s0 .hole, .s0 .said { display: none; } /* your cards live in the dock */
+  .dock {
+    margin: 0 1rem 1.5rem; grid-template-columns: auto 1fr; padding: .9rem 1rem;
+  }
+  .actions { grid-column: 1 / -1; display: grid; grid-template-columns: 1fr 1fr; }
+  .raise-box { grid-column: 1 / -1; }
+  .raise-box input { flex: 1; }
+  .card.lg { --w: 3.1rem; }
+}
+@media (prefers-reduced-motion: no-preference) {
+  .seat.turn .avatar { transition: --p .25s linear; }
+}
+</style>
+</head>
+<body>
+<header class="site-head">
+  <a class="wordmark" href="#">House Game</a>
+  <nav class="site-nav" aria-label="Main">
+    <a href="#" aria-current="page">Table</a>
+    <a href="#">Results</a>
+    <a href="#">About</a>
+    <a href="#">Profile</a>
+    <span class="conn" data-state="live" role="status">Live</span>
+  </nav>
+</header>
+
+<main>
+  <div class="stage">
+    <section class="table" aria-label="Home game table">
+      <div class="center">
+        <div class="street">Flop</div>
+        <div class="board">
+          <div class="card red"><div class="idx">Q<span>♦</span></div><div class="pip">♦</div></div>
+          <div class="card"><div class="idx">9<span>♣</span></div><div class="pip">♣</div></div>
+          <div class="card red"><div class="idx">4<span>♥</span></div><div class="pip">♥</div></div>
+          <div class="card slot" aria-hidden="true"></div>
+          <div class="card slot" aria-hidden="true"></div>
+        </div>
+        <div class="pot">Pot <strong>140</strong></div>
+      </div>
+
+      <!-- s0 = you -->
+      <div class="seat s0 you turn">
+        <div class="avatar" style="--p:.62">G<span class="dealer">D</span></div>
+        <div class="plate"><div class="name">Gera1t (you)</div><div class="stack">960</div></div>
+      </div>
+      <div class="seat s1 folded">
+        <div class="said">fold</div>
+        <div class="hole"><div class="card sm back"></div><div class="card sm back"></div></div>
+        <div class="avatar">a</div>
+        <div class="plate"><div class="name">aaa</div><div class="stack">995</div></div>
+      </div>
+      <div class="seat s2">
+        <div class="said">bet 40</div>
+        <div class="hole"><div class="card sm back"></div><div class="card sm back"></div></div>
+        <div class="avatar">L</div>
+        <div class="plate"><div class="name">lynx</div><div class="stack">930</div></div>
+        <div class="bet">40</div>
+      </div>
+      <div class="seat s3 empty">
+        <div class="avatar">Open</div>
+      </div>
+      <div class="seat s4">
+        <div class="said auto">auto-check</div>
+        <div class="hole"><div class="card sm back"></div><div class="card sm back"></div></div>
+        <div class="avatar">S</div>
+        <div class="plate"><div class="name">soundwave</div><div class="stack">1,005</div></div>
+      </div>
+      <div class="seat s5 empty">
+        <div class="avatar">Open</div>
+      </div>
+    </section>
+  </div>
+
+  <section class="dock" aria-label="Your move">
+    <div class="mine" aria-label="Your cards">
+      <div class="card lg"><div class="idx">A<span>♠</span></div><div class="pip">♠</div></div>
+      <div class="card lg red"><div class="idx">Q<span>♥</span></div><div class="pip">♥</div></div>
+    </div>
+    <p class="prompt" style="margin:0"><strong>Your turn.</strong> lynx bet 40.<span class="clock">19s</span></p>
+    <form class="actions" onsubmit="return false">
+      <button class="btn fold" type="submit">Fold</button>
+      <button class="btn call" type="submit">Call 40</button>
+      <div class="raise-box">
+        <label class="visually-hidden" for="amt" hidden>Raise to</label>
+        <input id="amt" type="number" inputmode="numeric" value="80" min="80" step="10" aria-label="Raise to" />
+        <button class="btn raise" type="submit">Raise to 80</button>
+        <button class="chip-btn" type="button">Min</button>
+        <button class="chip-btn" type="button">½ pot</button>
+        <button class="chip-btn" type="button">Pot</button>
+        <button class="chip-btn" type="button">All in</button>
+      </div>
+    </form>
+  </section>
+</main>
+</body>
+</html>

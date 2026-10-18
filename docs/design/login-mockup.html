@@ -1,0 +1,47 @@
+<!doctype html>
+<html lang="en-AU">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Log in · House Game</title>
+<link href="https://fonts.googleapis.com/css2?family=Atkinson+Hyperlegible+Next:wght@400;700&family=Young+Serif&display=swap" rel="stylesheet" />
+<link rel="stylesheet" href="auth.css" />
+</head>
+<body>
+<header class="site-head">
+  <a class="wordmark" href="#">House Game</a>
+  <nav class="site-nav" aria-label="Main">
+    <a href="#">Table</a><a href="#">Results</a><a href="#">About</a>
+    <a href="#" aria-current="page">Log in</a><a href="#">Register</a>
+  </nav>
+</header>
+<main class="auth">
+  <div class="fan" aria-hidden="true">
+    <div class="card"><span class="idx">A<br>♠</span>♠</div>
+    <div class="card red"><span class="idx">K<br>♥</span>♥</div>
+  </div>
+  <section class="panel">
+    <h1>Log in</h1>
+    <p class="lede">Log in to take your seat at the table.</p>
+    <form>
+      <div class="field">
+        <label for="username">Username</label>
+        <input id="username" name="username" type="text" autocomplete="username" autocapitalize="none" spellcheck="false" required />
+      </div>
+      <div class="field">
+        <label for="password">Password</label>
+        <div class="pw">
+          <input id="password" name="password" type="password" autocomplete="current-password" required />
+          <button type="button" aria-controls="password" aria-pressed="false">Show</button>
+        </div>
+      </div>
+      <button class="primary" type="submit">Log in</button>
+    </form>
+    <p class="links">
+      <span><a href="#">Forgot your password?</a></span>
+      <span>New here? <a href="#">Create an account</a></span>
+    </p>
+  </section>
+</main>
+</body>
+</html>

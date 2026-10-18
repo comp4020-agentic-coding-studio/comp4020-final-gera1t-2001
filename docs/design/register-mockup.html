@@ -1,0 +1,90 @@
+<!doctype html>
+<html lang="en-AU">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Create an account · House Game</title>
+<link href="https://fonts.googleapis.com/css2?family=Atkinson+Hyperlegible+Next:wght@400;700&family=Young+Serif&display=swap" rel="stylesheet" />
+<link rel="stylesheet" href="auth.css" />
+</head>
+<body>
+<header class="site-head">
+  <a class="wordmark" href="#">House Game</a>
+  <nav class="site-nav" aria-label="Main">
+    <a href="#">Table</a><a href="#">Results</a><a href="#">About</a>
+    <a href="#">Log in</a><a href="#" aria-current="page">Register</a>
+  </nav>
+</header>
+<main class="auth">
+  <div class="fan" aria-hidden="true">
+    <div class="card"><span class="idx">A<br>♠</span>♠</div>
+    <div class="card red"><span class="idx">K<br>♥</span>♥</div>
+  </div>
+  <section class="panel">
+    <h1>Create an account</h1>
+    <p class="lede">One account per person. Every seat starts with 1,000 play chips; nothing here is real money.</p>
+
+    <!-- shown only after a failed submit; each item links to its field -->
+    <div class="summary" role="alert" tabindex="-1">
+      <strong>Fix 1 thing to continue</strong>
+      <ul><li><a href="#username">That username is already taken.</a></li></ul>
+    </div>
+
+    <form>
+      <fieldset>
+        <legend>Your login</legend>
+        <div class="field invalid">
+          <label for="username">Username</label>
+          <input id="username" type="text" value="lynx" autocomplete="username" autocapitalize="none" spellcheck="false"
+            aria-invalid="true" aria-describedby="username-hint username-error" />
+          <span class="field-error" id="username-error">That username is already taken. Try another.</span>
+          <span class="hint" id="username-hint">3–20 characters: lowercase letters, numbers and _. You log in with this.</span>
+        </div>
+        <div class="field">
+          <label for="password">Password</label>
+          <div class="pw">
+            <input id="password" type="password" value="Poker2026" autocomplete="new-password" aria-describedby="password-rules" />
+            <button type="button" aria-controls="password" aria-pressed="false">Show</button>
+          </div>
+          <ul class="rules" id="password-rules" aria-live="polite">
+            <li class="met">8 or more characters</li>
+            <li class="met">An uppercase letter</li>
+            <li class="met">A lowercase letter</li>
+            <li class="met">A number</li>
+            <li>A symbol, like ! or ?</li>
+          </ul>
+        </div>
+      </fieldset>
+
+      <fieldset>
+        <legend>At the table</legend>
+        <div class="field">
+          <label for="display_name">Display name <span class="opt">(optional)</span></label>
+          <input id="display_name" type="text" maxlength="40" aria-describedby="dn-hint" />
+          <span class="hint" id="dn-hint">What other players see on your seat. Leave it blank to use your username.</span>
+        </div>
+      </fieldset>
+
+      <fieldset>
+        <legend>If you forget your password</legend>
+        <p class="why">There's no email reset here. Pick two questions only you can answer; you'll answer them to set a new password. Capitals and extra spaces don't matter.</p>
+        <div class="q">
+          <label class="n" for="q1">Question 1</label>
+          <select id="q1"><option>What was the first dish you learned to cook?</option></select>
+          <label class="visually-hidden" for="a1" hidden>Answer 1</label>
+          <input id="a1" type="text" placeholder="Your answer" aria-label="Answer to question 1" />
+        </div>
+        <div class="q">
+          <label class="n" for="q2">Question 2</label>
+          <select id="q2"><option>Choose a different question</option></select>
+          <input id="a2" type="text" placeholder="Your answer" aria-label="Answer to question 2" />
+        </div>
+      </fieldset>
+
+      <button class="primary" type="submit">Create account and go to the table</button>
+    </form>
+    <p class="links"><span>Already have an account? <a href="#">Log in</a></span></p>
+  </section>
+</main>
+</body>
+</html>
