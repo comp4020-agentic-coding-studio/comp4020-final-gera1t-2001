@@ -8,7 +8,16 @@ import { existsSync, readFileSync, statSync } from "node:fs";
 import { extname, resolve } from "node:path";
 
 import {
-  RECOVERY_QUESTION_COUNT,
+  BIO_MAX,
+  DISPLAY_NAME_MAX,
+  MESSAGES,
+  RECOVERY_QUESTIONS as RECOVERY_QUESTION_COUNT,
+  passwordErrors,
+  registerErrors,
+} from "./account-messages.ts";
+import type { FormError } from "./account-messages.ts";
+import { forgotPage, loginPage, registerPage, resetPage } from "./account-pages.ts";
+import {
   createUser,
   findUserByUsername,
   getSecurityQuestions,
@@ -48,6 +57,7 @@ import { createSession, deleteSession, userForSessionToken } from "./sessions.ts
 // Opening the database here (src/db.ts) is what step 2/3 needed to show: the
 // file lives under /data in production, with the schema applied on boot.
 import "./db.ts";
+import { db } from "./db.ts";
 
 // Re-arms every table's turn-timeout timer from table_state.turn_deadline —
 // a table whose deadline already passed while the process was down gets its
@@ -57,26 +67,10 @@ restoreSchedulersOnBoot();
 
 const projectRoot = resolve(import.meta.dirname, "..");
 
-const USERNAME_RE = /^[a-z0-9_]{3,20}$/;
-const DISPLAY_NAME_MAX = 40;
-const BIO_MAX = 160;
-const PASSWORD_MIN = 8;
-const PASSWORD_RULE_HINT = `At least ${PASSWORD_MIN} characters, including an uppercase letter, a lowercase letter, a digit, and a punctuation mark.`;
 const SESSION_COOKIE = "session";
 
-// One message per missing part, so the error says exactly what's missing
-// rather than a single pass/fail verdict.
-function passwordErrors(password: string): string[] {
-  const errors: string[] = [];
-  if (password.length < PASSWORD_MIN) {
-    errors.push(`Password must be at least ${PASSWORD_MIN} characters.`);
-  }
-  if (!/[a-z]/.test(password)) errors.push("Password must include a lowercase letter.");
-  if (!/[A-Z]/.test(password)) errors.push("Password must include an uppercase letter.");
-  if (!/[0-9]/.test(password)) errors.push("Password must include a digit.");
-  if (!/[^A-Za-z0-9]/.test(password)) errors.push("Password must include a punctuation mark.");
-  return errors;
-}
+// Where a visitor lands after logging in or registering with no (safe) `next`.
+const DEFAULT_LANDING = "/tables/1";
 
 function currentUser(c: Context): User | undefined {
   const token = getCookie(c, SESSION_COOKIE);
@@ -182,64 +176,14 @@ app.get("/readme/:asset{.+}", (c) => {
 
 // --- Register ---------------------------------------------------------
 
-function registerForm(errors: string[], values: Record<string, string>, next?: string): string {
-  const v = (k: string): string => escapeHtml(values[k] ?? "");
-  const questionOptions = (selected: string): string =>
-    `<option value="" disabled${selected ? "" : " selected"}>Choose a question</option>` +
-    SECURITY_QUESTIONS.map(
-      (q) =>
-        `<option value="${escapeHtml(q.key)}"${q.key === selected ? " selected" : ""}>${escapeHtml(q.text)}</option>`,
-    ).join("");
-  const questionInputs = Array.from({ length: RECOVERY_QUESTION_COUNT }, (_, i) => {
-    const n = i + 1;
-    return `
-      <p>
-        <label for="question_${n}">Security question ${n}</label><br />
-        <select id="question_${n}" name="question_${n}" required>${questionOptions(values[`question_${n}`] ?? "")}</select>
-      </p>
-      <p>
-        <label for="answer_${n}">Answer ${n}</label><br />
-        <input id="answer_${n}" name="answer_${n}" type="text" maxlength="200" required
-          value="${v(`answer_${n}`)}" />
-      </p>`;
-  }).join("");
-
-  return `
-    ${errorList(errors)}
-    <form method="post" action="/register">
-      ${next ? `<input type="hidden" name="next" value="${escapeHtml(next)}" />` : ""}
-      <p>
-        <label for="username">Username (3-20 lowercase letters, numbers, underscore)</label><br />
-        <input id="username" name="username" type="text" required pattern="[a-z0-9_]{3,20}"
-          autocomplete="username" value="${v("username")}" />
-      </p>
-      <p>
-        <label for="password">Password</label><br />
-        <input id="password" name="password" type="password" required minlength="${PASSWORD_MIN}"
-          autocomplete="new-password" aria-describedby="password-rule" /><br />
-        <small id="password-rule">${escapeHtml(PASSWORD_RULE_HINT)}</small>
-      </p>
-      <p>
-        <label for="display_name">Display name (optional — defaults to your username)</label><br />
-        <input id="display_name" name="display_name" type="text" maxlength="${DISPLAY_NAME_MAX}"
-          value="${v("display_name")}" />
-      </p>
-      <p>
-        <label for="bio">Bio (optional)</label><br />
-        <textarea id="bio" name="bio" maxlength="${BIO_MAX}">${v("bio")}</textarea>
-      </p>
-      ${questionInputs}
-      <p>Choose two different questions.</p>
-      <p><button type="submit">Register</button></p>
-    </form>`;
+function buyIn(): number {
+  return (db.prepare("SELECT buy_in FROM poker_tables WHERE id = 1").get() as { buy_in: number } | undefined)?.buy_in ?? 1000;
 }
 
 app.get("/register", (c) => {
   const next = safeNextPath(c.req.query("next"));
-  if (currentUser(c)) return c.redirect(next ?? "/profile", 303);
-  return c.html(
-    page("Register", `<main><h1>Register</h1>${registerForm([], {}, next)}</main>`, { current: "register", next }),
-  );
+  if (currentUser(c)) return c.redirect(next ?? DEFAULT_LANDING, 303);
+  return c.html(page("Create an account", registerPage({ next, buyIn: buyIn() }), { current: "register", next }));
 });
 
 app.post("/register", async (c) => {
@@ -250,48 +194,28 @@ app.post("/register", async (c) => {
   const username = str("username").trim();
   const password = str("password");
   const displayNameInput = str("display_name").trim();
+  // The register page has no bio field; a POST that still carries one is kept
+  // (the profile page is where it is normally set).
   const bio = str("bio").trim();
   const questions = Array.from({ length: RECOVERY_QUESTION_COUNT }, (_, i) => ({
     questionKey: str(`question_${i + 1}`).trim(),
     answer: str(`answer_${i + 1}`).trim(),
   }));
 
-  const errors: string[] = [];
-  if (!USERNAME_RE.test(username)) {
-    errors.push("Username must be 3-20 characters: lowercase letters, numbers, underscore only.");
-  } else if (findUserByUsername(username)) {
-    errors.push("That username is already taken.");
-  }
-  errors.push(...passwordErrors(password));
-  if (displayNameInput.length > DISPLAY_NAME_MAX) {
-    errors.push(`Display name must be ${DISPLAY_NAME_MAX} characters or fewer.`);
-  }
-  if (bio.length > BIO_MAX) {
-    errors.push(`Bio must be ${BIO_MAX} characters or fewer.`);
-  }
-  questions.forEach((q, i) => {
-    if (!q.questionKey || !isValidQuestionKey(q.questionKey)) {
-      errors.push(`Choose a valid option for security question ${i + 1}.`);
-    }
-    if (!q.answer) errors.push(`Security question ${i + 1} needs an answer.`);
-  });
-  if (
-    questions.length === 2 &&
-    questions[0].questionKey &&
-    questions[0].questionKey === questions[1].questionKey
-  ) {
-    errors.push("Choose two different security questions.");
-  }
-
-  const values: Record<string, string> = { username, display_name: displayNameInput, bio };
-  questions.forEach((q, i) => {
-    values[`question_${i + 1}`] = q.questionKey;
-    values[`answer_${i + 1}`] = q.answer;
-  });
+  const errors = registerErrors(
+    { username, password, displayName: displayNameInput, bio, questions },
+    { usernameTaken: !!findUserByUsername(username), isValidQuestionKey },
+  );
 
   if (errors.length > 0) {
+    // Typed values come back, except the password.
+    const values: Record<string, string> = { username, display_name: displayNameInput };
+    questions.forEach((q, i) => {
+      values[`question_${i + 1}`] = q.questionKey;
+      values[`answer_${i + 1}`] = q.answer;
+    });
     return c.html(
-      page("Register", `<main><h1>Register</h1>${registerForm(errors, values, next)}</main>`, {
+      page("Create an account", registerPage({ errors, values, next, buyIn: buyIn() }), {
         current: "register",
         next,
       }),
@@ -308,36 +232,17 @@ app.post("/register", async (c) => {
     questions.map((q) => ({ questionKey: q.questionKey, answerHash: hashSecret(normaliseAnswer(q.answer)) })),
   );
   signIn(c, userId);
-  return c.redirect(next ?? "/profile", 303);
+  return c.redirect(next ?? DEFAULT_LANDING, 303);
 });
 
 // --- Log in / log out ---------------------------------------------------
 
-function loginForm(error: string | undefined, username: string, next?: string): string {
-  return `
-    ${error ? errorList([error]) : ""}
-    <form method="post" action="/login">
-      ${next ? `<input type="hidden" name="next" value="${escapeHtml(next)}" />` : ""}
-      <p>
-        <label for="username">Username</label><br />
-        <input id="username" name="username" type="text" required autocomplete="username"
-          value="${escapeHtml(username)}" />
-      </p>
-      <p>
-        <label for="password">Password</label><br />
-        <input id="password" name="password" type="password" required autocomplete="current-password" />
-      </p>
-      <p><button type="submit">Log in</button></p>
-    </form>
-    <p><a href="/forgot-password">Forgot your password?</a></p>`;
-}
-
 app.get("/login", (c) => {
   const next = safeNextPath(c.req.query("next"));
-  if (currentUser(c)) return c.redirect(next ?? "/profile", 303);
-  return c.html(
-    page("Log in", `<main><h1>Log in</h1>${loginForm(undefined, "", next)}</main>`, { current: "login", next }),
-  );
+  if (currentUser(c)) return c.redirect(next ?? DEFAULT_LANDING, 303);
+  // /login?reset=1 is where a successful password reset sends people.
+  const notice = c.req.query("reset") === "1" ? MESSAGES.passwordChanged : undefined;
+  return c.html(page("Log in", loginPage({ next, notice }), { current: "login", next }));
 });
 
 app.post("/login", async (c) => {
@@ -358,8 +263,11 @@ app.post("/login", async (c) => {
   }
 
   if (!user || !ok) {
+    // One generic message that never says which part was wrong. It sits under
+    // the password, which is the box the person has to retype: the username
+    // stays in its box and the password is not sent back.
     return c.html(
-      page("Log in", `<main><h1>Log in</h1>${loginForm("Invalid username or password.", username, next)}</main>`, {
+      page("Log in", loginPage({ errors: [{ field: "password", message: MESSAGES.loginMismatch }], username, next }), {
         current: "login",
         next,
       }),
@@ -368,7 +276,7 @@ app.post("/login", async (c) => {
   }
 
   signIn(c, user.id);
-  return c.redirect(next ?? "/profile", 303);
+  return c.redirect(next ?? DEFAULT_LANDING, 303);
 });
 
 app.post("/logout", (c) => {
@@ -468,69 +376,17 @@ function securityQuestionsForUsername(username: string): { position: number; que
   return placeholderQuestionsForUsername(username).map((q, i) => ({ position: i + 1, question: q.text }));
 }
 
-function resetForm(
-  username: string,
-  questions: { position: number; question: string }[],
-  errors: string[],
-): string {
-  const answerInputs = questions
-    .map(
-      (q) => `
-      <div class="field">
-        <label for="answer_${q.position}">${escapeHtml(q.question)}</label>
-        <input id="answer_${q.position}" name="answer_${q.position}" type="text" required maxlength="200" />
-      </div>`,
-    )
-    .join("");
-
-  return `
-    ${errorList(errors)}
-    <form method="post" action="/reset-password">
-      <input type="hidden" name="username" value="${escapeHtml(username)}" />
-      ${answerInputs}
-      <div class="field">
-        <label for="new_password">New password</label>
-        <input id="new_password" name="new_password" type="password" required minlength="${PASSWORD_MIN}"
-          autocomplete="new-password" aria-describedby="new-password-rule" />
-        <small id="new-password-rule" class="hint">${escapeHtml(PASSWORD_RULE_HINT)}</small>
-      </div>
-      <div class="field">
-        <label for="confirm_password">Confirm new password</label>
-        <input id="confirm_password" name="confirm_password" type="password" required
-          minlength="${PASSWORD_MIN}" autocomplete="new-password" />
-      </div>
-      <button class="primary" type="submit">Reset password</button>
-    </form>`;
-}
-
 app.get("/forgot-password", (c) =>
-  c.html(
-    page(
-      "Forgot password",
-      `<main class="auth"><section class="panel"><h1>Forgot password</h1>
-      <form method="post" action="/forgot-password">
-        <div class="field">
-          <label for="username">Username</label>
-          <input id="username" name="username" type="text" required autocomplete="username" />
-        </div>
-        <button class="primary" type="submit">Continue</button>
-      </form></section></main>`,
-      { user: currentUser(c) },
-    ),
-  ),
+  c.html(page("Forgot password", forgotPage(), { user: currentUser(c) })),
 );
 
 app.post("/forgot-password", async (c) => {
   const body = await c.req.parseBody();
   const username = typeof body.username === "string" ? body.username.trim() : "";
   return c.html(
-    page(
-      "Reset your password",
-      `<main class="auth"><section class="panel"><h1>Reset your password</h1>
-      <p class="lede">Answer your security questions and choose a new password.</p>
-      ${resetForm(username, securityQuestionsForUsername(username), [])}</section></main>`,
-      { user: currentUser(c) },
-    ),
+    page("Reset your password", resetPage({ username, questions: securityQuestionsForUsername(username) }), {
+      user: currentUser(c),
+    }),
   );
 });
 
@@ -543,27 +399,23 @@ app.post("/reset-password", async (c) => {
   const confirmPassword = str("confirm_password");
   const answers = Array.from({ length: RECOVERY_QUESTION_COUNT }, (_, i) => str(`answer_${i + 1}`));
 
-  const rerender = (errors: string[]): Response =>
+  const rerender = (errors: FormError[]): Response =>
     c.html(
-      page(
-        "Reset your password",
-        `<main class="auth"><section class="panel"><h1>Reset your password</h1>
-        <p class="lede">Answer your security questions and choose a new password.</p>
-        ${resetForm(username, securityQuestionsForUsername(username), errors)}</section></main>`,
-        { user: currentUser(c) },
-      ),
+      page("Reset your password", resetPage({ username, questions: securityQuestionsForUsername(username), errors }), {
+        user: currentUser(c),
+      }),
       400,
     );
 
   const newPasswordErrors = passwordErrors(newPassword);
   if (newPasswordErrors.length > 0) {
-    return rerender(newPasswordErrors);
+    return rerender([{ field: "new_password", message: newPasswordErrors.join(" ") }]);
   }
   if (newPassword !== confirmPassword) {
-    return rerender(["New password and confirmation do not match."]);
+    return rerender([{ field: "confirm_password", message: MESSAGES.passwordsDiffer }]);
   }
 
-  const genericFailure = (): Response => rerender(["One or more answers were incorrect."]);
+  const genericFailure = (): Response => rerender([{ field: "answer_1", message: MESSAGES.answersWrong }]);
   const user = findUserByUsername(username);
 
   if (!user) {
@@ -575,9 +427,7 @@ app.post("/reset-password", async (c) => {
   }
 
   if (isRecoveryLocked(user)) {
-    return rerender([
-      `Too many failed attempts. Try again after ${new Date(user.recovery_locked_until as string).toLocaleString()}.`,
-    ]);
+    return rerender([{ message: MESSAGES.lockedOut, lockedUntil: user.recovery_locked_until as string }]);
   }
 
   const stored = getSecurityQuestions(user.id);
@@ -588,20 +438,13 @@ app.post("/reset-password", async (c) => {
 
   if (!allCorrect) {
     // One failed attempt, however many answers were wrong — and the message
-    // above never says which one.
+    // never says which one.
     recordFailedRecoveryAttempt(user);
     return genericFailure();
   }
 
   resetPassword(user.id, hashSecret(newPassword));
-  return c.html(
-    page(
-      "Password reset",
-      `<main class="auth"><section class="panel"><h1>Password reset</h1>
-      <p class="lede">Your password has been reset. <a href="/login">Log in</a> with your new password.</p></section></main>`,
-      { user: currentUser(c) },
-    ),
-  );
+  return c.redirect("/login?reset=1", 303);
 });
 
 // --- Poker (C9) ----------------------------------------------------------

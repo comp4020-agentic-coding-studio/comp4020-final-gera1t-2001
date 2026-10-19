@@ -135,7 +135,44 @@ select { text-overflow: ellipsis; }
 .summary ul { margin: 0; padding-left: 1.1rem; }
 .summary a { color: var(--red); }
 
+/* ---- Log in / register pieces, from docs/design/auth.css ---- */
+/* Two cards fanned above the panel: the one decorative touch on these pages. */
+.fan { position: relative; width: 7rem; height: 4.2rem; margin-bottom: -1.4rem; z-index: 1; }
+.fan .card {
+  position: absolute; bottom: 0; left: 50%; width: 3.3rem; aspect-ratio: 5/7;
+  background: var(--card); border-radius: .4rem; box-shadow: 0 6px 16px rgba(0,0,0,.35);
+  font-family: var(--serif); color: var(--ink); display: grid; place-items: center; font-size: 1.6rem;
+}
+.fan .card .idx { position: absolute; left: .3rem; top: .15rem; font-size: .9rem; line-height: .95; text-align: center; }
+.fan .card.red { color: var(--red); }
+.fan .card:first-child { transform: translateX(-80%) rotate(-12deg); transform-origin: bottom center; }
+.fan .card:last-child { transform: translateX(-20%) rotate(10deg); transform-origin: bottom center; }
+
+.pw { position: relative; }
+.panel .pw input { padding-right: 4.5rem; }
+.pw button {
+  position: absolute; right: .35rem; top: 50%; transform: translateY(-50%);
+  font: 700 .85rem var(--sans); background: none; border: 0; color: var(--ink-2);
+  padding: .5rem .6rem; cursor: pointer; border-radius: .4rem;
+}
+.panel :focus-visible { outline: 3px solid var(--brass-ink); }
+.rules {
+  list-style: none; padding: 0; margin: .5rem 0 0; display: grid;
+  grid-template-columns: 1fr 1fr; gap: .2rem 1rem; font-size: .9rem; color: var(--ink-2);
+}
+.rules li::before { content: "○"; display: inline-block; width: 1.2rem; }
+.rules li.met { color: #1f6b4a; }
+.rules li.met::before { content: "✓"; font-weight: 700; }
+
+.q { display: grid; gap: 0; margin-bottom: .4rem; }
+.notice {
+  border-left: 4px solid #1f6b4a; background: #e8f4ed; color: var(--ink);
+  padding: .75rem 1rem; border-radius: .4rem; margin: 0 0 1.5rem;
+}
+.summary:focus { outline: 3px solid var(--brass-ink); outline-offset: 2px; }
+
 @media (max-width: 640px) {
   .site-nav { margin-left: 0; width: 100%; gap: .4rem .9rem; font-size: .9rem; }
   .auth { padding-top: 2.5rem; }
+  .rules { grid-template-columns: 1fr; }
 }
