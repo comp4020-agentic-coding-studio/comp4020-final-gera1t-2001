@@ -1481,3 +1481,69 @@ AWAY_STAND_MS from 60 s to 5 minutes, and the '2 consecutive timeouts'
 stand-up rule raised to 5... Update the constants, the tests that depend
 on them (keep them non-vacuous), and the brief's 'Owner decisions' line
 to match. pnpm check green, commit, log, push, confirm CI and deploy."
+
+## 2026-10-19 — [judgement]
+
+**What happened:** Step 5. `src/html.ts` is now the one layout. `page(title,
+body, { user, current, next })` renders "<title> · House Game" (just
+"House Game" on home), the font links, `/assets/site.css`, `/favicon.svg`
+and the header with `aria-current`. `nav()` in `server.ts` is gone.
+Forgot/reset password and profile moved onto the paper panel with their
+wording and fields unchanged. `/readme/` is a 70ch column on the room
+colour.
+
+**What I did instead of the obvious thing:**
+- **Stylesheet freshness:** the URL is `site.css?v=<12-hex sha256 of the
+  file>`, computed once at boot. The current hash is served `immutable`;
+  any other `v` (or none) gets `no-cache`. So an old page linking an old
+  hash revalidates instead of being pinned to a stale copy.
+- **Form styles scoped to `.panel`.** `auth.css` styles bare `input`,
+  `select` and `fieldset`. Copying it verbatim would have restyled the
+  table page's raise input and the not-yet-rebuilt login and register
+  forms (Step 6's job). Tokens are verbatim; only the selectors gained
+  `.panel`.
+- **The table's connection pill moved into the header nav** (a `navExtra`
+  slot the layout only places), as in the mockup. It stays outside
+  `#table-root`, so Step 3's "a render can't wipe it" still holds.
+- **`errorList` keeps `role="alert"` and its `li`s** inside the new
+  `.summary` box, because `spec/accounts.test.ts` reads errors through
+  `[role="alert"] li`. Step 6 replaces it.
+- **Discarded:** the first render had no side gutter on login and
+  register (content flush at x=0 at both sizes), found by an Opus review
+  of the screenshots. Fixed with a default `main` gutter that the page
+  classes override.
+
+**How I knew it was right:**
+- Headless Chromium against a scratch server on a copy of the dev DB, at
+  1920×1080 and 390×844. Pages: home (signed out and in), about, login,
+  register, forgot, reset, reset with errors, profile, profile with errors,
+  table.
+  - `scrollWidth - innerWidth` was 0 on all 22.
+  - The sensor isn't vacuous: on forgot at 390 it read 0, then 146 with a
+    500px element injected, then 0 after removing it.
+  - Titles and `aria-current` were correct, the stylesheet was linked,
+    both Google fonts loaded, and the table pill reached `live` from the
+    header nav.
+- Tab order on login, register, forgot, reset, profile and table runs
+  wordmark → nav → fields → submit at both sizes. Every stop showed the
+  brass focus ring, or on panel inputs the mockup's brass glow.
+- `/assets/site.css` without a hash gave `no-cache`; with the current
+  hash, `immutable`.
+- `pnpm check` against the scratch server: typecheck plus 31/31
+  (`home.test.ts` and the README check included), before and after the
+  gutter fix.
+
+**Not checked:**
+- Production (not pushed) and the Docker image.
+- Keyboard focus was read from computed styles in headless Chromium, not
+  tabbed by a person.
+- `/results` is linked in the nav but doesn't exist until Step 8 (404
+  today).
+- About's h1 reads "no name". That comes from README.md, which is the
+  owner's to edit.
+
+**Citation:** `083bf33` (`src/html.ts`, `src/assets/site.css`,
+`src/assets/favicon.svg`, `src/server.ts`, `src/poker/page.ts`).
+
+**Curated prompt:** "Do Step 5 only. Report what you verified and what you
+didn't, then stop and wait for me."
