@@ -1416,3 +1416,68 @@ one-shot `notice`. Migration 0004 clears table 1 once.
 fix. Test migration 0004 on a copy of a database that has seats and a
 hand in progress... Report what you verified and what you didn't, then
 stop and wait for me. Don't push until I approve."
+
+## 2026-10-19 — [judgement]
+
+**What happened:** Before the Step 4 push, the owner raised two numbers:
+`AWAY_STAND_MS` from 60 s to 5 minutes, and the stand-up rule from 2 to 5
+timeouts in a row. Phones drop the stream whenever the app goes to the
+background, and standing up resets chips. The 5 s away turn and the 10 s
+grace stay. I updated the constants, test 3, and the brief's Owner
+decisions and Step 4 text.
+
+**What I did instead of the obvious thing:**
+- **Test 3 rebuilt rather than renumbered.** Changing "2" to "5" in the
+  old test would have passed for the wrong reason. Hand 1 now stops the
+  ghost at exactly 4 timeouts and asserts they're still seated, so a rule
+  that fires early goes red. The ghost's stream then reopens for the next
+  deal (the phone back in the foreground, since a deal only deals in
+  present players). Hand 2 ends at exactly the 5th timeout: alice
+  min-raises first, so the ghost faces a wager and the timeout is a fold.
+  That makes a rule that fires late go red too. The raise amount is a
+  raise-to total; I checked `handleRaise` and the "RAISE amounts are
+  raise-to totals" comment in `@pokertools/engine`'s `actions/` before
+  relying on it.
+- **Why hand 2 needed the raise.** I measured it first: with only a bet,
+  hand 2 ended at 6 timeouts. `startHand` builds a fresh engine each hand,
+  so heads-up the button is always the lower seat. The ghost is big blind
+  again, so they get the option (5th) and then act first on the flop (6th).
+- **Correction to the previous entry's non-vacuous result.** Re-running
+  "always present" for this change, test 3 at first stayed green. A trace
+  showed every ghost turn reporting `away false` with 3.6–3.9 s left.
+  `waitUntilAway` gives up after its cap (about 8 s here), which ate the
+  12 s turn down to under the 4 s limit, so "time left ≤ 4 s" passed by
+  coincidence. The same weakness was in `97a4e0d`'s test 3. Its earlier
+  red under sabotage came from the first ghost turn, which had no wait
+  before it. Each ghost turn now also asserts `away === true` from the
+  view. Two discarded runs along the way: one where a curl check left a
+  stray player seated (4 red tests, all from the extra seat), and two
+  where `-t` matched "3. chip conservation" instead of test 3.
+
+**How I knew it was right:**
+- Scratch server, short timings (`TURN_TIMEOUT_SECONDS=12`, 3 s graces,
+  `AWAY_TURN_SECONDS=3`, constants at their new defaults), full spec:
+  - control (real code): 31/31.
+  - presence forced to "always present": exactly tests 1 and 3 red ("expected
+    11998 to be less than or equal to 4000"; "expected false to be true").
+  - server threshold 2 (spec reads 5): only test 3 red ("expected undefined
+    to be defined": the ghost was gone after hand 1).
+  - server threshold 6: only test 3 red (the ghost's seat was still there
+    after the 5th timeout).
+  All reverted; `grep` finds no trace.
+- `pnpm check` at the real defaults against a fresh scratch server:
+  typecheck + 31/31 in 181 s. The server log was clean.
+
+**Not checked:** No browser look at this change; the page reads `away`
+and `notice`, and neither changed. The 5-minute rule wasn't timed end to
+end at its real length. The 60 s version was (boot+90.2 s, previous
+entry), and only the constant changed.
+
+**Citation:** `b31671b` (`src/poker/live.ts`, `spec/poker.test.ts`,
+`docs/final-brief.md`).
+
+**Curated prompt:** "the owner is changing two Step 4 numbers:
+AWAY_STAND_MS from 60 s to 5 minutes, and the '2 consecutive timeouts'
+stand-up rule raised to 5... Update the constants, the tests that depend
+on them (keep them non-vacuous), and the brief's 'Owner decisions' line
+to match. pnpm check green, commit, log, push, confirm CI and deploy."
