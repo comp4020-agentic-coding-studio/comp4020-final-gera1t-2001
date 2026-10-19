@@ -1568,3 +1568,30 @@ owner's copy. `git status` showed only that file staged.
 **Curated prompt:** "Copy the reflection from my Windows folder, don't
 retype it... Check it ends with 'That retest found the real causes.'
 Commit it alone, no edits."
+
+## 2026-10-19 — [routine]
+
+**What happened:** On approving Step 5, the owner asked for two changes:
+hide the Results nav link until Step 8 builds `/results` (it was a 404),
+and change README.md's first line from "# no name" to "# House Game".
+The rest of README is untouched.
+
+**What I did instead of the obvious thing:** I removed the link, not just
+hid it with CSS. A hidden link would still be in the DOM and could be
+tabbed to by some screen readers. A comment where it goes says Step 8
+restores it. The `"results"` `NavItem` stays, for Step 8.
+
+**How I knew it was right:**
+- Headless Chromium on a scratch server at 1920×1080 and 390×844. The
+  nav reads Table / About / Log in / Register signed out, and
+  Table / About / Profile / Log out signed in.
+- `scrollWidth - innerWidth` was 0 on all 22 page and viewport pairs,
+  and the table pill reached `live`.
+- `/readme/`'s h1 is "House Game".
+- `pnpm check`: 31/31.
+
+**Citation:** `bae2ef8` (`src/html.ts`, `README.md`).
+
+**Curated prompt:** "Hide the Results nav link until Step 8 builds
+/results. Owner-approved README edit: change only the first line from
+'# no name' to '# House Game'."
