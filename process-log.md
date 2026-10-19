@@ -1643,3 +1643,32 @@ that field's aria-describedby target".
 
 **Curated prompt:** "Do Step 6 only. Report what you verified and what you
 didn't, then stop and wait for me. Don't push."
+
+## 2026-10-19 — [harness]
+
+**What happened:** The owner asked, before approving Step 6, to show that a
+failed login for an unknown username and one for a wrong password return
+identical HTML, error placement included. I added that as a test.
+
+**What I did instead of the obvious thing:** I did not string-compare the two
+HTML bodies after a `sed` of the username. The test parses both responses,
+blanks the echoed `#username` value through the DOM, and compares status,
+`Set-Cookie` and the whole serialised document. It also asserts the page
+contains the mismatch message, so two empty pages can't pass.
+
+**How I knew it was right:**
+- Green on the real code.
+- Proved non-vacuous: I made the server put the error on `username` for
+  unknown users only. That test, and only that test, went red. I reverted
+  and it went green again.
+- By hand with curl: both responses were `400` with identical headers apart
+  from `Date`, and the bodies differed only on the echoed `value=` line.
+
+**Citation:** `38d4174` (`spec/accounts.test.ts`). Check name that went
+red → green: "a failed login looks the same for an unknown username and a
+wrong password".
+
+**Curated prompt:** "Show that a failed login with an unknown username and
+one with a wrong password return identical HTML, error placement included,
+apart from the echoed username. Add a test for it, and prove the test isn't
+vacuous."
