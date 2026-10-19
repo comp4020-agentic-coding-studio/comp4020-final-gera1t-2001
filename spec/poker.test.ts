@@ -1,7 +1,13 @@
 import { randomBytes } from "node:crypto";
-import { afterEach, beforeEach, describe, expect, inject, it } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, inject, it } from "vitest";
 
-import { SSE_HEARTBEAT_MS } from "../src/poker/live.ts";
+import {
+  AWAY_GRACE_MS,
+  AWAY_TURN_SECONDS,
+  BOOT_GRACE_MS,
+  SSE_HEARTBEAT_MS,
+  TURN_TIMEOUT_SECONDS,
+} from "../src/poker/live.ts";
 
 // These tests sit real users at the one seeded table ("Home game", id 1) and
 // play real hands, so — like spec/accounts.test.ts — they only run locally,
@@ -70,12 +76,14 @@ interface SeatView {
   username: string;
   displayName: string;
   stack: number;
+  away?: boolean; // final brief Step 4
 }
 
 interface HandPlayer {
   id: string;
   seat: number;
   stack: number;
+  betThisStreet: number;
   hand: [string, string] | [null, null] | null;
 }
 
@@ -91,14 +99,18 @@ interface LastAction {
   seat: number;
   type: string;
   auto: boolean;
+  at: string;
 }
 
 interface TableView {
-  table: { id: number; name: string; buy_in: number; max_seats: number };
+  table: { id: number; name: string; big_blind: number; buy_in: number; max_seats: number };
   seats: SeatView[];
   hand: HandView | null;
   turnDeadline: string | null;
   lastAction: LastAction | null;
+  // Final brief Step 4: who was just stood up for being away, so the page
+  // can say why a seat emptied.
+  notice?: { type: string; players: { userId: number; displayName: string }[] } | null;
   you: number | null;
   version: number;
   seq: number;
@@ -330,6 +342,10 @@ function connectSse(cookie: string): SseConnection {
   };
 }
 
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, Math.max(0, ms)));
+}
+
 async function waitPastDeadline(turnDeadline: string | null, bufferMs = 500): Promise<void> {
   if (!turnDeadline) throw new Error("no turn_deadline to wait past");
   const waitMs = new Date(turnDeadline).getTime() - Date.now() + bufferMs;
@@ -339,13 +355,21 @@ async function waitPastDeadline(turnDeadline: string | null, bufferMs = 500): Pr
 describe.skipIf(!isLocal)("poker (writes test data — local only)", () => {
   let alice: Player;
   let bob: Player;
+  // Final brief Step 4: a seated player with no open stream goes away after
+  // AWAY_GRACE_MS, and an away player's turn is cut to AWAY_TURN_SECONDS.
+  // These tests model two players at their screens (7 and 8 wait out a full
+  // TURN_TIMEOUT_SECONDS), so each holds a stream for the whole test,
+  // separate from any stream a test opens to watch for pushes.
+  let presence: SseConnection[] = [];
 
   beforeEach(async () => {
     alice = await registerAndSit();
     bob = await registerAndSit();
+    presence = [connectSse(alice.cookie), connectSse(bob.cookie)];
   });
 
   afterEach(async () => {
+    for (const s of presence) s.close();
     await cleanupTable([alice, bob]);
   });
 
@@ -697,4 +721,212 @@ describe.skipIf(!isLocal)("a stream the page can trust (writes test data — loc
     for (let i = 1; i < seqs.length; i++) expect(seqs[i]).toBeGreaterThan(seqs[i - 1]);
     expect(bootIds.size).toBe(1); // one process throughout, so seq order is meaningful
   });
+});
+
+// Final brief Step 4: ghost seats. A seated player with no open stream for
+// AWAY_GRACE_MS is away; an away player's turn waits AWAY_TURN_SECONDS, not
+// TURN_TIMEOUT_SECONDS; AWAY_STAND_TIMEOUTS timeouts in a row stand them up
+// when the hand ends. Every deadline here is read from the view and measured
+// against the clock, never assumed. The numbers come from src/poker/live.ts,
+// so a run that shortens one through env has to set it for the app and for
+// `pnpm check` alike.
+//
+// Who gets the button is the engine's choice, not this file's, so each test
+// branches on the view's actionTo rather than on seat numbers.
+describe.skipIf(!isLocal)("ghost seats (writes test data — local only)", () => {
+  const seated: Player[] = [];
+  const streams: SseConnection[] = [];
+
+  // A user's away state also counts BOOT_GRACE_MS from the app's start, which
+  // this file can't see. Waiting for the view to say `away` (rather than a
+  // fixed sleep) covers both graces; the cap lets a build without presence
+  // carry on to the assertion that names what's wrong, instead of failing on
+  // a wait.
+  const AWAY_WAIT_CAP_MS = AWAY_GRACE_MS + BOOT_GRACE_MS + 2000;
+  const AWAY_DEADLINE_MAX_MS = AWAY_TURN_SECONDS * 1000 + 1000;
+  // Generous enough for a build without presence, where every ghost turn
+  // runs the full TURN_TIMEOUT_SECONDS before the assertion can fail.
+  const GHOST_TEST_TIMEOUT_MS = AWAY_WAIT_CAP_MS + 4 * TURN_TIMEOUT_SECONDS * 1000 + 20_000;
+
+  function holdStream(p: Player): SseConnection {
+    const s = connectSse(p.cookie);
+    streams.push(s);
+    return s;
+  }
+
+  async function sitNew(): Promise<Player> {
+    const p = await registerAndSit();
+    seated.push(p);
+    return p;
+  }
+
+  function seatOf(view: TableView, p: Player): SeatView | undefined {
+    return view.seats.find((s) => s.userId === p.userId);
+  }
+
+  async function waitUntilAway(watcher: Player, ghost: Player): Promise<void> {
+    const start = Date.now();
+    while (Date.now() - start < AWAY_WAIT_CAP_MS) {
+      if (seatOf(await getView(watcher.cookie), ghost)?.away === true) return;
+      await sleep(250);
+    }
+  }
+
+  // Waits for the server's turn timer to act for whoever is to act now.
+  async function waitForTimeout(watcher: Player, view: TableView): Promise<TableView> {
+    const version = view.version;
+    await waitPastDeadline(view.turnDeadline, 300);
+    for (let i = 0; i < 40; i++) {
+      const now = await getView(watcher.cookie);
+      if (now.version !== version) return now;
+      await sleep(250);
+    }
+    throw new Error("the turn timer didn't act");
+  }
+
+  function msUntil(deadline: string | null): number {
+    if (!deadline) throw new Error("no turn_deadline");
+    return new Date(deadline).getTime() - Date.now();
+  }
+
+  // A stranger's POST starts the hand, so no seated player's presence comes
+  // from having just posted.
+  async function startAsStranger(): Promise<TableView> {
+    return startHand(await register(randomUsername()));
+  }
+
+  beforeAll(() => {
+    // The tests below can't tell an away deadline from a full one otherwise.
+    expect(TURN_TIMEOUT_SECONDS).toBeGreaterThan(AWAY_TURN_SECONDS + 1);
+  });
+
+  afterEach(async () => {
+    for (const s of streams) s.close();
+    streams.length = 0;
+    if (seated.length > 0) await cleanupTable(seated);
+    seated.length = 0;
+  });
+
+  it(
+    "1. a seated player whose stream is closed gets a deadline at most AWAY_TURN_SECONDS + 1 s away",
+    { timeout: GHOST_TEST_TIMEOUT_MS },
+    async () => {
+      const alice = await sitNew();
+      const ghost = await sitNew(); // never opens a stream
+      holdStream(alice);
+
+      const dealt = await startHand(alice.cookie);
+      await waitUntilAway(alice, ghost);
+
+      let ghostTurn: TableView;
+      if (dealt.hand!.actionTo === ghost.seatNo) {
+        // The turn began while the ghost was still present (they'd just sat
+        // down); going away mid-turn pulls the deadline in.
+        ghostTurn = await getView(alice.cookie);
+      } else {
+        // Heads-up preflop, the first actor faces the big blind, so call is
+        // legal; it hands the action to the ghost.
+        ghostTurn = await act(alice.cookie, "call");
+      }
+      expect(ghostTurn.hand!.actionTo).toBe(ghost.seatNo);
+      expect(msUntil(ghostTurn.turnDeadline)).toBeLessThanOrEqual(AWAY_DEADLINE_MAX_MS);
+      expect(seatOf(ghostTurn, ghost)?.away).toBe(true);
+    },
+  );
+
+  it(
+    "2. a present player (stream open) still gets the full timeout",
+    { timeout: AWAY_GRACE_MS + 15_000 },
+    async () => {
+      const alice = await sitNew();
+      const bob = await sitNew();
+      holdStream(alice);
+      holdStream(bob);
+      // Past the grace since either last posted, so only the streams keep
+      // them present.
+      await sleep(AWAY_GRACE_MS + 1000);
+
+      const dealt = await startAsStranger();
+      const first = dealt.hand!.actionTo === alice.seatNo ? alice : bob;
+      expect(msUntil(dealt.turnDeadline)).toBeGreaterThan(TURN_TIMEOUT_SECONDS * 1000 - 1000);
+      expect(seatOf(dealt, first)?.away).toBe(false);
+      expect(seatOf(dealt, first === alice ? bob : alice)?.away).toBe(false);
+    },
+  );
+
+  it(
+    "3. a player who times out twice in a row is no longer seated after that hand ends",
+    { timeout: GHOST_TEST_TIMEOUT_MS },
+    async () => {
+      const alice = await sitNew();
+      const ghost = await sitNew();
+      holdStream(alice);
+
+      let view = await startHand(alice.cookie);
+      // A fresh engine per hand puts the button on the lowest occupied seat
+      // (@pokertools/engine's moveButton), and alice sat first at an empty
+      // table, so she acts first preflop. If the ghost did, their first
+      // timeout would be a fold that ends the hand after one timeout, and
+      // the next deal would stand them up for being away, so this test
+      // could never see two in a row.
+      expect(view.hand!.actionTo).toBe(alice.seatNo);
+      let timeouts = 0;
+      // Play the hand out: alice checks or calls, except that once the ghost
+      // has timed out enough, she bets, so the ghost's next timeout is a fold
+      // and the hand ends. The ghost only ever times out.
+      for (let guard = 0; guard < 12 && view.hand!.winners === null; guard++) {
+        if (view.hand!.actionTo === ghost.seatNo) {
+          if (timeouts > 0) {
+            // Every ghost turn after the first starts with them already away.
+            expect(msUntil(view.turnDeadline)).toBeLessThanOrEqual(AWAY_DEADLINE_MAX_MS);
+          }
+          view = await waitForTimeout(alice, view);
+          expect(view.lastAction).toMatchObject({ seat: ghost.seatNo, auto: true });
+          timeouts++;
+          continue;
+        }
+        const me = view.hand!.players[alice.seatNo]!;
+        const owed = Math.max(...view.hand!.players.map((p) => p?.betThisStreet ?? 0)) - me.betThisStreet;
+        if (owed > 0) view = await act(alice.cookie, "call");
+        else if (timeouts >= 2) view = await act(alice.cookie, "bet", view.table.big_blind);
+        else view = await act(alice.cookie, "check");
+      }
+
+      expect(timeouts).toBeGreaterThanOrEqual(2);
+      const after = await getView(alice.cookie);
+      expect(after.hand!.winners).not.toBeNull();
+      expect(seatOf(after, ghost)).toBeUndefined();
+      expect(after.notice?.players.map((p) => p.userId)).toContain(ghost.userId);
+    },
+  );
+
+  it(
+    "4. closing and reopening a stream within the grace period doesn't mark the player away",
+    { timeout: AWAY_GRACE_MS * 2 + 15_000 },
+    async () => {
+      const alice = await sitNew();
+      const bob = await sitNew();
+      holdStream(alice);
+
+      const first = connectSse(bob.cookie);
+      await first.nextView(() => true, 2000);
+      first.close();
+      const closedAt = Date.now();
+      await sleep(AWAY_GRACE_MS / 2);
+      const second = holdStream(bob);
+      await second.nextView(() => true, 2000);
+      // Past the grace measured from the close, so a reopen that didn't count
+      // would show here.
+      await sleep(closedAt + AWAY_GRACE_MS + 1500 - Date.now());
+
+      const before = await getView(alice.cookie);
+      expect(seatOf(before, bob)?.away).toBe(false);
+
+      // bob's own turn still gets the full timeout.
+      let bobTurn = await startAsStranger();
+      if (bobTurn.hand!.actionTo !== bob.seatNo) bobTurn = await act(alice.cookie, "call");
+      expect(bobTurn.hand!.actionTo).toBe(bob.seatNo);
+      expect(msUntil(bobTurn.turnDeadline)).toBeGreaterThan(TURN_TIMEOUT_SECONDS * 1000 - 1000);
+    },
+  );
 });

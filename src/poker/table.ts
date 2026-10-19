@@ -8,15 +8,8 @@ import { findUserById } from "../accounts.ts";
 import { db } from "../db.ts";
 import type { Action, PublicState } from "./engine.ts";
 import { PokerEngine } from "./engine.ts";
+import { TURN_TIMEOUT_SECONDS } from "./live.ts";
 import { STALE_ACTION_MESSAGE, UNKNOWN_MOVE_MESSAGE, playerMessageForEngineError } from "./messages.ts";
-
-// Owner decision (docs/c9-brief.md): when it's your turn and you do nothing
-// (or disconnect), the server acts for you after a countdown — check if
-// checking is legal, otherwise fold. Overridable so Step 4's tests don't
-// have to wait 30 real seconds; the app reads this once at boot, so the env
-// var has to be set before the process starts (same pattern as APP_URL in
-// spec/global-setup.ts).
-export const TURN_TIMEOUT_SECONDS = Number(process.env.TURN_TIMEOUT_SECONDS ?? 30);
 
 // A rejection the caller is meant to see verbatim (out-of-turn, illegal bet,
 // table full, ...) — as opposed to a genuine bug, which should not leak its
