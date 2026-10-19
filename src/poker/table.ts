@@ -2,6 +2,8 @@
 // src/server.ts that touches the game calls into here; this is the only
 // place that mutates poker_tables/seats/table_state/hand_results, and (with
 // src/poker/engine.ts) the only place that imports @pokertools/engine.
+import { randomUUID } from "node:crypto";
+
 import { findUserById } from "../accounts.ts";
 import { db } from "../db.ts";
 import type { Action, PublicState } from "./engine.ts";
@@ -69,6 +71,13 @@ export interface TableView {
   // compares to tell whether anything was written, not only whether the
   // public state happens to look the same.
   version: number;
+  // Final brief Step 3: a per-table counter bumped by every notifyTable(),
+  // plus an id for this process. A client renders a view only if bootId
+  // changed or seq didn't go down, so a slow response can't paint over a
+  // newer push. In memory: a restart starts seq again at 0, under a new
+  // bootId.
+  seq: number;
+  bootId: string;
   // Not persisted — purely a "something just happened" hint for the table
   // page to show ("auto-folded"), cleared the moment a new action replaces
   // it. Lost on restart, which is fine: nothing correctness-bearing reads it.
@@ -94,6 +103,13 @@ const lastActionByTable = new Map<number, LastAction>();
 type TableListener = () => void;
 const tableListeners = new Map<number, Set<TableListener>>();
 
+export const BOOT_ID = randomUUID();
+const seqByTable = new Map<number, number>();
+
+export function currentSeq(tableId: number): number {
+  return seqByTable.get(tableId) ?? 0;
+}
+
 export function subscribeToTable(tableId: number, listener: TableListener): () => void {
   let listeners = tableListeners.get(tableId);
   if (!listeners) {
@@ -108,6 +124,10 @@ export function subscribeToTable(tableId: number, listener: TableListener): () =
 }
 
 function notifyTable(tableId: number): void {
+  // Bumped before any listener runs, and every caller has already committed
+  // its change, so any view built from here on (by a listener or by the
+  // route's own response) reads a seq at least this high.
+  seqByTable.set(tableId, currentSeq(tableId) + 1);
   const listeners = tableListeners.get(tableId);
   if (!listeners) return;
   // One listener throwing shouldn't stop the rest of a table's connections
@@ -155,6 +175,10 @@ export function buildView(tableId: number, viewerUserId: number | undefined): Ta
   const table = getTable(tableId);
   if (!table) return undefined;
 
+  // Read before any table data: everything below is at least as new as this
+  // seq, so a view never claims a seq newer than what it shows.
+  const seq = currentSeq(tableId);
+
   const seats = getSeats(tableId).map((s) => {
     const user = findUserById(s.user_id);
     return {
@@ -177,6 +201,8 @@ export function buildView(tableId: number, viewerUserId: number | undefined): Ta
     hand,
     turnDeadline: stateRow?.turn_deadline ?? null,
     version: stateRow?.version ?? 0,
+    seq,
+    bootId: BOOT_ID,
     lastAction: lastActionByTable.get(tableId) ?? null,
     you: viewerUserId ?? null,
     youDisplayName: viewerUserId !== undefined ? (findUserById(viewerUserId)?.display_name ?? null) : null,

@@ -115,10 +115,19 @@ const tableClientScript = String.raw`
   // the player's next action (see post()), not until the next push.
   var statusEl = document.getElementById("status-message");
   var bannerEl = document.getElementById("identity-banner");
+  // Outside #table-root too, so a render can't wipe it (final brief Step 3).
+  var connEl = document.getElementById("conn-pill");
   // Set once this window learns the browser is signed in as someone else
   // (final brief Step 2); only a reload clears it.
   var identityLost = false;
-  var DISCONNECTED_MESSAGE = "Live updates disconnected — reconnecting...";
+
+  // Final brief Step 3: only render a view at least as new as the last one
+  // painted, so a slow POST response can't paint over a newer push. seq
+  // restarts at 0 when the server restarts, under a new bootId, so a changed
+  // bootId always renders. Seeded from the server-rendered first paint.
+  var lastBootId = document.body.dataset.bootId;
+  var lastRenderedSeq = Number(document.body.dataset.seq);
+  var lastDecision = null; // which turn the raise amount was typed for; see render()
 
   var SUITS = { s: ["♠", "black"], h: ["♥", "red"], d: ["♦", "red"], c: ["♣", "black"] };
 
@@ -141,6 +150,9 @@ const tableClientScript = String.raw`
     // place under a banner that says this window is playing as someone else.
     if (view.you !== viewerId) showIdentityBanner(view.youDisplayName);
     if (identityLost) return;
+    if (view.bootId === lastBootId && view.seq < lastRenderedSeq) return;
+    lastBootId = view.bootId;
+    lastRenderedSeq = view.seq;
     var hand = view.hand;
     var seatByNo = {};
     view.seats.forEach(function (s) { seatByNo[s.seatNo] = s; });
@@ -214,15 +226,44 @@ const tableClientScript = String.raw`
       '<form id="start-form" class="table-controls"' + (!hand || hand.winners !== null ? "" : " hidden") + '>' +
       '<button type="submit">Start hand</button></form>';
 
+    // Rebuilding the markup would drop what the player is doing: a half-typed
+    // raise amount, or keyboard focus. Note both, restore them after.
+    var focusKey = document.activeElement && root.contains(document.activeElement)
+      ? controlKey(document.activeElement)
+      : null;
+    // The typed amount belongs to this decision only: keep it while it's
+    // still your turn on the same street, drop it once you've acted.
+    var amountBefore = root.querySelector("#action-form:not([hidden]) input[name=amount]");
+    var typedAmount = amountBefore ? amountBefore.value : "";
+    var decision = hand && hand.winners === null ? hand.handNumber + ":" + hand.street + ":" + hand.actionTo : null;
+    if (decision !== lastDecision) typedAmount = "";
+    lastDecision = decision;
+
     root.innerHTML =
       '<div class="felt"><div class="community"><div class="pot">Pot: ' + pot + '</div>' +
       '<div class="board">' + (board || "<em>no community cards yet</em>") + "</div></div>" +
       '<ul class="seats">' + seatsHtml + "</ul></div>" +
       turnInfo + actionsHtml + seatControlsHtml;
 
+    var amountAfter = root.querySelector("#action-form input[name=amount]");
+    if (amountAfter && typedAmount) amountAfter.value = typedAmount;
+    if (focusKey) {
+      root.querySelectorAll("button, input").forEach(function (el) {
+        if (controlKey(el) === focusKey) el.focus();
+      });
+    }
+
     wireForms();
     disableControls();
     updateCountdown(); // paint it now, not up to 250ms later on the next tick
+  }
+
+  // Which control this is, in a way that survives the markup being rebuilt:
+  // its form, plus its name (an input, whose value changes as you type) or
+  // its value (a button: fold, check, ...).
+  function controlKey(el) {
+    var form = el.form ? el.form.id : "";
+    return form + "|" + (el.tagName === "INPUT" ? "input:" + el.name : "button:" + (el.value || el.textContent));
   }
 
   // The countdown is always recomputed from the server's turn_deadline, not
@@ -254,8 +295,12 @@ const tableClientScript = String.raw`
       : "This window is playing as " + playingAs +
         ", but this browser is now signed out (another tab or window). Reload to log in again.";
     bannerEl.hidden = false;
-    statusEl.textContent = ""; // e.g. a "reconnecting..." that is no longer true
+    statusEl.textContent = "";
     disableControls();
+    // Nothing more to fetch for this window: it won't paint again.
+    connEl.hidden = true;
+    if (source) source.close();
+    stopPolling();
   }
 
   function disableControls() {
@@ -319,31 +364,161 @@ const tableClientScript = String.raw`
   wireForms();
   updateCountdown(); // paint the server-rendered first paint's countdown immediately too
 
-  var source = new EventSource("/tables/" + tableId + "/events");
-  source.addEventListener("view", function (event) {
-    render(JSON.parse(event.data));
-  });
-  source.onerror = function () {
-    // A 401 on reconnect (the server ends a stream whose session is gone)
-    // makes EventSource give up for good rather than retry, so ask once who
-    // this browser is now instead of promising a reconnect that won't come.
-    if (source.readyState === EventSource.CLOSED) {
-      fetch("/tables/" + tableId + "/view").then(function (res) {
-        if (res.status === 401) return showIdentityBanner(null);
-        showError("Live updates stopped. Reload to reconnect.");
-        if (res.ok) return res.json().then(render);
-      }).catch(function () {
-        showError("Live updates stopped. Reload to reconnect.");
-      });
+  // --- A stream the page can trust (final brief Step 3) ---------------
+  //
+  // The server sends a named "ping" every 5 s, so silence means a dead or
+  // stalled stream, not a quiet table: in production one was seen to stop
+  // delivering without ever erroring. If nothing (view or ping) arrives for
+  // STALL_MS, close it and open a new one, and poll the view until the new
+  // stream delivers, so the table stays current meanwhile.
+  var STALL_MS = 12000;
+  var POLL_MS = 1500;
+  var POLL_TIMEOUT_MS = 4000; // a hung poll counts as failed, not as one that never ends
+  // Reconnecting is the normal state while recovering, server restarts
+  // included. Offline means it's no longer likely to come back by itself:
+  // the browser says it has no network, or nothing has answered for this
+  // long.
+  var OFFLINE_AFTER_MS = 30000;
+  var RETRY_MS = 2000; // matches the server's "retry:"
+  var CONN_TEXT = {
+    live: "Live",
+    reconnecting: "Reconnecting…",
+    offline: "Offline: showing the last table I saw",
+  };
+  var viewUrl = "/tables/" + tableId + "/view";
+
+  var source = null;
+  var streamLive = false; // the current stream has delivered since it opened
+  var streamOpenedAt = 0;
+  var lastMessageAt = Date.now();
+  var pollTimer = null;
+  var pollInFlight = false;
+  var lastReachedAt = Date.now(); // last time the server answered anything
+
+  function setConn(state) {
+    connEl.dataset.state = state;
+    connEl.textContent = CONN_TEXT[state];
+  }
+
+  function openStream() {
+    if (source) source.close();
+    var s = new EventSource("/tables/" + tableId + "/events");
+    source = s;
+    streamOpenedAt = Date.now();
+    function delivered() {
+      if (s !== source) return false; // a stream already replaced
+      lastMessageAt = lastReachedAt = Date.now();
+      if (!streamLive) {
+        streamLive = true;
+        stopPolling();
+        setConn("live");
+      }
+      return true;
+    }
+    s.addEventListener("view", function (event) {
+      if (delivered()) render(JSON.parse(event.data));
+    });
+    s.addEventListener("ping", function (event) {
+      if (!delivered()) return;
+      var ping = JSON.parse(event.data);
+      if (ping.seq > lastRenderedSeq) fetchView(); // a view this page never got
+    });
+    s.onerror = function () {
+      if (s === source) streamDown();
+    };
+  }
+
+  function streamDown() {
+    if (identityLost) return;
+    streamLive = false;
+    if (connEl.dataset.state === "live") setConn("reconnecting");
+    startPolling();
+  }
+
+  // Resolves true if the server answered (and the view was handed to
+  // render, which applies the seq rule), false if it couldn't be reached.
+  // A 401 means this browser is signed out now (Step 2's banner).
+  function fetchView() {
+    var controller = new AbortController();
+    var timer = setTimeout(function () { controller.abort(); }, POLL_TIMEOUT_MS);
+    return fetch(viewUrl, { signal: controller.signal, cache: "no-store" })
+      .then(function (res) {
+        if (res.status === 401) {
+          showIdentityBanner(null);
+          return true;
+        }
+        if (!res.ok) return false; // e.g. the proxy's 502 while the app is down
+        lastReachedAt = Date.now();
+        return res.json().then(function (view) {
+          render(view);
+          return true;
+        });
+      })
+      .catch(function () { return false; })
+      .finally(function () { clearTimeout(timer); });
+  }
+
+  function pollOnce() {
+    if (pollInFlight) return;
+    pollInFlight = true;
+    fetchView().then(function (reached) {
+      pollInFlight = false;
+      if (streamLive || identityLost) return;
+      var gaveUp = !navigator.onLine || (!reached && Date.now() - lastReachedAt > OFFLINE_AFTER_MS);
+      setConn(gaveUp ? "offline" : "reconnecting");
+    });
+  }
+
+  function startPolling() {
+    if (pollTimer || identityLost) return;
+    pollTimer = setInterval(pollOnce, POLL_MS);
+    pollOnce();
+  }
+
+  function stopPolling() {
+    clearInterval(pollTimer);
+    pollTimer = null;
+  }
+
+  setInterval(function () {
+    if (identityLost) return;
+    var now = Date.now();
+    if (streamLive) {
+      if (now - lastMessageAt > STALL_MS) {
+        streamDown();
+        openStream();
+      }
       return;
     }
-    showError(DISCONNECTED_MESSAGE);
-  };
-  // Messages otherwise stay until the player's next action, but this one is
-  // about the connection, so the connection coming back clears it.
-  source.onopen = function () {
-    if (statusEl.textContent === DISCONNECTED_MESSAGE) showError("");
-  };
+    // Not live yet: EventSource retries a dropped connection by itself, but
+    // gives up for good on a non-200 answer (a proxy's 502 while the app is
+    // down), and a stream that opens but never delivers is no better.
+    var waited = now - streamOpenedAt;
+    if ((source.readyState === EventSource.CLOSED && waited > RETRY_MS) || waited > STALL_MS) openStream();
+  }, 1000);
+
+  // Back to a tab, back online, or back from the browser's page cache: the
+  // stream may have been asleep or dead the whole time, so catch up now
+  // rather than wait out the watchdog.
+  document.addEventListener("visibilitychange", function () {
+    if (document.visibilityState === "visible" && !identityLost) fetchView();
+  });
+  window.addEventListener("online", function () {
+    if (identityLost) return;
+    fetchView();
+    if (!streamLive) openStream();
+  });
+  window.addEventListener("offline", function () {
+    streamDown();
+    if (!identityLost) setConn("offline");
+  });
+  window.addEventListener("pageshow", function (event) {
+    if (identityLost) return;
+    fetchView();
+    if (event.persisted) openStream(); // a page restored from cache has a closed stream
+  });
+
+  openStream();
 })();
 `;
 
@@ -378,13 +553,24 @@ const TABLE_STYLE = `
                      align-items: center; }
   .identity-banner p { margin: 0; flex: 1 1 20rem; }
   .identity-banner[hidden] { display: none; }
+  .table-header { display: flex; flex-wrap: wrap; align-items: center; gap: 0.25rem 1rem; }
+  .table-header h1 { margin-right: auto; }
+  /* The mockup's .conn: a dot coloured by state. */
+  .conn { display: inline-flex; align-items: center; gap: 0.4rem; font-size: 0.875rem; }
+  .conn::before { content: ""; flex: none; width: 0.55rem; height: 0.55rem; border-radius: 50%; background: #6fcf97; }
+  .conn[data-state="reconnecting"]::before { background: #e2b24f; }
+  .conn[data-state="offline"]::before { background: #c0302a; }
+  .conn[hidden] { display: none; }
 `;
 
 export function renderTablePage(view: TableView): string {
   const body = `
     <style>${TABLE_STYLE}</style>
     <main data-table-id="${view.table.id}">
-      <h1>${escapeHtml(view.table.name)}</h1>
+      <div class="table-header">
+        <h1>${escapeHtml(view.table.name)}</h1>
+        <span id="conn-pill" class="conn" data-state="reconnecting" role="status">Reconnecting…</span>
+      </div>
       <p><a href="/">Home</a></p>
       <div id="identity-banner" class="identity-banner" role="alert" hidden>
         <p data-banner-text></p>
@@ -397,8 +583,10 @@ export function renderTablePage(view: TableView): string {
   // Read off document.body by the inline script. data-viewer-id is who this
   // page was rendered for; every POST sends it back as "as" (final brief
   // Step 2), and a view whose "you" differs means the cookie changed hands.
+  // data-seq/data-boot-id are this first paint's place in the seq order
+  // (Step 3), so a slower, older response can't replace it either.
   return page(view.table.name, body).replace(
     "<body>",
-    `<body data-table-id="${view.table.id}" data-viewer-id="${view.you ?? ""}" data-viewer-name="${escapeHtml(view.youDisplayName ?? "")}">`,
+    `<body data-table-id="${view.table.id}" data-viewer-id="${view.you ?? ""}" data-viewer-name="${escapeHtml(view.youDisplayName ?? "")}" data-seq="${view.seq}" data-boot-id="${escapeHtml(view.bootId)}">`,
   );
 }

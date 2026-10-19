@@ -1,6 +1,8 @@
 import { randomBytes } from "node:crypto";
 import { afterEach, beforeEach, describe, expect, inject, it } from "vitest";
 
+import { SSE_HEARTBEAT_MS } from "../src/poker/live.ts";
+
 // These tests sit real users at the one seeded table ("Home game", id 1) and
 // play real hands, so — like spec/accounts.test.ts — they only run locally,
 // never against the live deployment.
@@ -99,6 +101,8 @@ interface TableView {
   lastAction: LastAction | null;
   you: number | null;
   version: number;
+  seq: number;
+  bootId: string;
 }
 
 async function register(username: string): Promise<string> {
@@ -190,6 +194,8 @@ interface SseEvent {
 }
 
 interface SseConnection {
+  // The next event of any name (view, ping, ...), with when it arrived.
+  nextEvent(timeoutMs: number): Promise<SseEvent & { at: number }>;
   // Reads events (skipping ones that don't match) until `predicate` matches
   // or `timeoutMs` elapses. Returns the matching view and how long the wait
   // took, measured from the moment this call started.
@@ -223,7 +229,7 @@ interface SseConnection {
 function connectSse(cookie: string): SseConnection {
   let closedByUser = false;
   let currentAbort: AbortController | undefined;
-  const queue: SseEvent[] = [];
+  const queue: (SseEvent & { at: number })[] = [];
   const waiters: (() => void)[] = [];
 
   function wakeAll(): void {
@@ -258,10 +264,10 @@ function connectSse(cookie: string): SseConnection {
           for (const line of raw.split("\n")) {
             if (line.startsWith("event:")) eventName = line.slice(6).trim();
             else if (line.startsWith("data:")) dataLines.push(line.slice(5).trim());
-            // lines starting with ":" are heartbeat comments — ignored
+            // ":" comment lines and "retry:" carry no data — ignored
           }
           if (dataLines.length > 0) {
-            queue.push({ event: eventName, data: dataLines.join("\n") });
+            queue.push({ event: eventName, data: dataLines.join("\n"), at: Date.now() });
             wakeAll();
           }
         }
@@ -280,11 +286,27 @@ function connectSse(cookie: string): SseConnection {
   })();
 
   return {
+    async nextEvent(timeoutMs) {
+      const start = Date.now();
+      while (queue.length === 0) {
+        const remaining = timeoutMs - (Date.now() - start);
+        if (remaining <= 0) throw new Error(`timed out after ${timeoutMs}ms waiting for any SSE event`);
+        await new Promise<void>((resolve) => {
+          const timer = setTimeout(resolve, Math.min(remaining, 1000));
+          waiters.push(() => {
+            clearTimeout(timer);
+            resolve();
+          });
+        });
+      }
+      return queue.shift()!;
+    },
     async nextView(predicate, timeoutMs) {
       const start = Date.now();
       while (true) {
         while (queue.length > 0) {
           const event = queue.shift()!;
+          if (event.event !== "view") continue; // pings carry no view
           const view = JSON.parse(event.data) as TableView;
           if (predicate(view)) return { view, elapsedMs: Date.now() - start };
         }
@@ -617,5 +639,62 @@ describe.skipIf(!isLocal)("one browser, two accounts (writes test data — local
     } finally {
       sse.close();
     }
+  });
+});
+
+// Final brief Step 3: a stream the page can trust.
+describe.skipIf(!isLocal)("a stream the page can trust (writes test data — local only)", () => {
+  let alice: Player;
+  let bob: Player;
+
+  beforeEach(async () => {
+    alice = await registerAndSit();
+    bob = await registerAndSit();
+  });
+
+  afterEach(async () => {
+    await cleanupTable([alice, bob]);
+  });
+
+  // The wait itself can legitimately run to SSE_HEARTBEAT_MS + 1 s, past
+  // vitest's 5 s default, so the test's own timeout sits above that.
+  it("10. B's stream receives a named ping within SSE_HEARTBEAT_MS + 1 s", { timeout: SSE_HEARTBEAT_MS + 5000 }, async () => {
+    const sse = connectSse(bob.cookie);
+    try {
+      const first = await sse.nextEvent(2000);
+      expect(first.event).toBe("view"); // the current view on connect
+      const openedAt = first.at;
+      let event = await sse.nextEvent(SSE_HEARTBEAT_MS + 1000);
+      while (event.event !== "ping") event = await sse.nextEvent(openedAt + SSE_HEARTBEAT_MS + 1000 - Date.now());
+      expect(event.at - openedAt).toBeLessThanOrEqual(SSE_HEARTBEAT_MS + 1000);
+      const data = JSON.parse(event.data) as { seq: number };
+      expect(Number.isInteger(data.seq)).toBe(true);
+    } finally {
+      sse.close();
+    }
+  });
+
+  it("11. views carry a seq that strictly increases across A's sit, start and act", async () => {
+    // registerAndSit already sat both; stand A up to take the sit again here.
+    await leaveTable(alice.cookie);
+    const seqs: number[] = [];
+    const bootIds = new Set<string>();
+    const record = (v: TableView): TableView => {
+      seqs.push(v.seq);
+      bootIds.add(v.bootId);
+      return v;
+    };
+
+    record(await getView(alice.cookie));
+    const sitRes = await fetch(new URL(`/tables/${TABLE_ID}/sit`, baseUrl), { method: "POST", headers: { cookie: alice.cookie } });
+    const sat = record((await sitRes.json()) as TableView);
+    alice.seatNo = sat.seats.find((s) => s.userId === alice.userId)!.seatNo;
+    const dealt = record(await startHand(alice.cookie));
+    const actor = dealt.hand!.actionTo === alice.seatNo ? alice : bob;
+    record(await act(actor.cookie, "call"));
+
+    expect(seqs.every(Number.isInteger)).toBe(true);
+    for (let i = 1; i < seqs.length; i++) expect(seqs[i]).toBeGreaterThan(seqs[i - 1]);
+    expect(bootIds.size).toBe(1); // one process throughout, so seq order is meaningful
   });
 });

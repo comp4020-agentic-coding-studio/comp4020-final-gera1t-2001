@@ -17,12 +17,11 @@ const TABLE_ID = Number(process.env.PROBE_TABLE_ID ?? 1);
 const ACTIONS = Number(process.env.PROBE_ACTIONS ?? 20);
 const NO_EVENT_TIMEOUT_MS = 5000;
 
-// How long the server waits between pushes before sending a heartbeat, so
-// the idle-hold check below knows what "healthy" looks like. Mirrors
-// src/server.ts's SSE_HEARTBEAT_MS (10s today; the brief's Step 3 shrinks it
-// to 5s and renames it a named `ping` event) — overridable so this probe
-// doesn't need a code change the day that constant does.
-const HEARTBEAT_MS = Number(process.env.PROBE_HEARTBEAT_MS ?? 10_000);
+// How often the server sends its heartbeat (a named "ping" event since final
+// brief Step 3), so the idle-hold check below knows what "healthy" looks
+// like. Mirrors src/poker/live.ts's SSE_HEARTBEAT_MS; overridable so a probe
+// pointed at an older deploy (10 s comment heartbeats) can still be read.
+const HEARTBEAT_MS = Number(process.env.PROBE_HEARTBEAT_MS ?? 5_000);
 // At least 25s (the owner's own number), and always long enough to span a
 // couple of heartbeats even if HEARTBEAT_MS is raised.
 const IDLE_HOLD_MS = Math.max(25_000, HEARTBEAT_MS * 2.5);
