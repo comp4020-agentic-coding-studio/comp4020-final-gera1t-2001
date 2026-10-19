@@ -303,6 +303,27 @@ describe.skipIf(!isLocal)("accounts (writes test data — local only)", () => {
     expect(doc.querySelector<HTMLInputElement>("#password")?.getAttribute("value")).toBeNull();
   });
 
+  it("a failed login looks the same for an unknown username and a wrong password", async () => {
+    const { username } = await register();
+    const fail = async (user: string) => {
+      const res = await fetch(new URL("/login", baseUrl), {
+        method: "POST",
+        body: new URLSearchParams({ username: user, password: "WrongPassword1!" }),
+      });
+      const doc = new JSDOM(await res.text()).window.document;
+      // The echoed username is the one allowed difference: blank it, then the
+      // whole page (error text, which field carries it, aria wiring) must match.
+      doc.querySelector("#username")!.setAttribute("value", "");
+      return { status: res.status, setCookie: res.headers.getSetCookie(), html: doc.documentElement.outerHTML };
+    };
+    const real = await fail(username);
+    const unknown = await fail(`nobody_${randomBytes(5).toString("hex")}`);
+    expect(real.status).toBe(400);
+    expect(unknown).toEqual(real);
+    // Guard against comparing two empty or error-free pages.
+    expect(real.html).toContain(MESSAGES.loginMismatch);
+  });
+
   it("a failed register shows the field's error inside that field's aria-describedby target", async () => {
     const { username } = await register();
     // Same username again, plus a password failing one rule.
