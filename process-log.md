@@ -1547,3 +1547,24 @@ colour.
 
 **Curated prompt:** "Do Step 5 only. Report what you verified and what you
 didn't, then stop and wait for me."
+
+## 2026-10-19 — [routine]
+
+**What happened:** The owner's crit 10 reflection went in as
+`reflections/crit-10.md`, copied from their Windows folder with `cp`,
+not retyped. Earlier, the text pasted into chat had ended mid-sentence,
+so I didn't commit it then.
+
+**What I did instead of the obvious thing:** Before copying, I checked the
+source file's last line was "That retest found the real causes." (as the
+owner asked) and that it had no CRLF line endings. After copying, `cmp`
+against the source reported identical. It was committed alone.
+
+**How I knew it was right:** `cmp` showed the file byte-identical to the
+owner's copy. `git status` showed only that file staged.
+
+**Citation:** `67ca27b` (`reflections/crit-10.md`).
+
+**Curated prompt:** "Copy the reflection from my Windows folder, don't
+retype it... Check it ends with 'That retest found the real causes.'
+Commit it alone, no edits."

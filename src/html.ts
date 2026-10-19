@@ -56,11 +56,12 @@ function siteHeader({ user, current, next, navExtra }: PageOptions): string {
       <form method="post" action="/logout"><button type="submit">Log out</button></form>`
     : `${navLink(`/login${suffix}`, "Log in", "login", current)}
       ${navLink(`/register${suffix}`, "Register", "register", current)}`;
+  // Results (between Table and About) joins the nav once Step 8 builds
+  // /results; until then it would be a link to a 404.
   return `<header class="site-head">
     <a class="wordmark" href="/">${SITE_NAME}</a>
     <nav class="site-nav" aria-label="Main">
       ${navLink("/tables/1", "Table", "table", current)}
-      ${navLink("/results", "Results", "results", current)}
       ${navLink("/readme/", "About", "about", current)}
       ${account}
       ${navExtra ?? ""}
