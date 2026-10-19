@@ -3,6 +3,7 @@ import { afterEach, beforeAll, beforeEach, describe, expect, inject, it } from "
 
 import {
   AWAY_GRACE_MS,
+  AWAY_STAND_TIMEOUTS,
   AWAY_TURN_SECONDS,
   BOOT_GRACE_MS,
   SSE_HEARTBEAT_MS,
@@ -747,6 +748,11 @@ describe.skipIf(!isLocal)("ghost seats (writes test data — local only)", () =>
   // Generous enough for a build without presence, where every ghost turn
   // runs the full TURN_TIMEOUT_SECONDS before the assertion can fail.
   const GHOST_TEST_TIMEOUT_MS = AWAY_WAIT_CAP_MS + 4 * TURN_TIMEOUT_SECONDS * 1000 + 20_000;
+  // Test 3 plays two hands. Each of the ghost's turns can wait for them to go
+  // away and then for a short turn, or, on a build without presence, run the
+  // full TURN_TIMEOUT_SECONDS.
+  const GHOST_TAKES_N_TIMEOUTS_MS =
+    2 * AWAY_STAND_TIMEOUTS * (AWAY_WAIT_CAP_MS + TURN_TIMEOUT_SECONDS * 1000) + 30_000;
 
   function holdStream(p: Player): SseConnection {
     const s = connectSse(p.cookie);
@@ -855,44 +861,79 @@ describe.skipIf(!isLocal)("ghost seats (writes test data — local only)", () =>
   );
 
   it(
-    "3. a player who times out twice in a row is no longer seated after that hand ends",
-    { timeout: GHOST_TEST_TIMEOUT_MS },
+    "3. a player who times out AWAY_STAND_TIMEOUTS times in a row is no longer seated after that hand ends",
+    { timeout: GHOST_TAKES_N_TIMEOUTS_MS },
     async () => {
       const alice = await sitNew();
       const ghost = await sitNew();
       holdStream(alice);
 
-      let view = await startHand(alice.cookie);
-      // A fresh engine per hand puts the button on the lowest occupied seat
-      // (@pokertools/engine's moveButton), and alice sat first at an empty
-      // table, so she acts first preflop. If the ghost did, their first
-      // timeout would be a fold that ends the hand after one timeout, and
-      // the next deal would stand them up for being away, so this test
-      // could never see two in a row.
-      expect(view.hand!.actionTo).toBe(alice.seatNo);
+      // Plays the current hand with the ghost only ever timing out, until
+      // they have exactly `target` timeouts in a row. Before the last one,
+      // alice puts chips in (a raise if she owes, a bet if not), so the
+      // ghost faces a wager and that timeout is a fold that ends the hand.
+      // If a timeout hands alice the action at `target`, she folds.
       let timeouts = 0;
-      // Play the hand out: alice checks or calls, except that once the ghost
-      // has timed out enough, she bets, so the ghost's next timeout is a fold
-      // and the hand ends. The ghost only ever times out.
-      for (let guard = 0; guard < 12 && view.hand!.winners === null; guard++) {
-        if (view.hand!.actionTo === ghost.seatNo) {
-          if (timeouts > 0) {
-            // Every ghost turn after the first starts with them already away.
-            expect(msUntil(view.turnDeadline)).toBeLessThanOrEqual(AWAY_DEADLINE_MAX_MS);
+      async function playUntil(start: TableView, target: number): Promise<TableView> {
+        let view = start;
+        for (let guard = 0; guard < 12 && view.hand!.winners === null; guard++) {
+          if (view.hand!.actionTo === ghost.seatNo) {
+            // Once the ghost is away, their turn is short, however it began.
+            // `away` is asserted, not only the time left: waitUntilAway gives
+            // up after a cap, and on a build without presence that wait alone
+            // can eat a full turn down to "under AWAY_TURN_SECONDS left".
+            await waitUntilAway(alice, ghost);
+            const turn = await getView(alice.cookie);
+            expect(turn.hand!.actionTo).toBe(ghost.seatNo);
+            expect(seatOf(turn, ghost)?.away).toBe(true);
+            expect(msUntil(turn.turnDeadline)).toBeLessThanOrEqual(AWAY_DEADLINE_MAX_MS);
+            view = await waitForTimeout(alice, turn);
+            expect(view.lastAction).toMatchObject({ seat: ghost.seatNo, auto: true });
+            timeouts++;
+            continue;
           }
-          view = await waitForTimeout(alice, view);
-          expect(view.lastAction).toMatchObject({ seat: ghost.seatNo, auto: true });
-          timeouts++;
-          continue;
+          const me = view.hand!.players[alice.seatNo]!;
+          const owed = Math.max(...view.hand!.players.map((p) => p?.betThisStreet ?? 0)) - me.betThisStreet;
+          const bigBlind = view.table.big_blind;
+          if (timeouts >= target) view = await act(alice.cookie, "fold");
+          else if (timeouts === target - 1 && owed > 0)
+            view = await act(alice.cookie, "raise", me.betThisStreet + owed + bigBlind);
+          else if (timeouts === target - 1) view = await act(alice.cookie, "bet", bigBlind);
+          else if (owed > 0) view = await act(alice.cookie, "call");
+          else view = await act(alice.cookie, "check");
         }
-        const me = view.hand!.players[alice.seatNo]!;
-        const owed = Math.max(...view.hand!.players.map((p) => p?.betThisStreet ?? 0)) - me.betThisStreet;
-        if (owed > 0) view = await act(alice.cookie, "call");
-        else if (timeouts >= 2) view = await act(alice.cookie, "bet", view.table.big_blind);
-        else view = await act(alice.cookie, "check");
+        expect(view.hand!.winners).not.toBeNull();
+        return view;
       }
 
-      expect(timeouts).toBeGreaterThanOrEqual(2);
+      // A fresh engine per hand puts the button on the lowest occupied seat
+      // (@pokertools/engine's moveButton), and alice sat first at an empty
+      // table, so she acts first preflop and the ghost, as big blind, gets
+      // the option and then acts first on every later street. If the ghost
+      // were first preflop, their first timeout would be a fold that ends
+      // the hand after one.
+      const dealt = await startHand(alice.cookie);
+      expect(dealt.hand!.actionTo).toBe(alice.seatNo);
+
+      // One short of the rule: the hand ends with the ghost still seated.
+      // This is what keeps the threshold honest. A rule that stood players
+      // up any earlier goes red here.
+      await playUntil(dealt, AWAY_STAND_TIMEOUTS - 1);
+      expect(timeouts).toBe(AWAY_STAND_TIMEOUTS - 1);
+      expect(seatOf(await getView(alice.cookie), ghost)).toBeDefined();
+
+      // The phone comes back to the foreground for the deal (a deal only
+      // deals in present players), then goes to the background again. The
+      // count carries over: none of those were real actions.
+      const back = connectSse(ghost.cookie);
+      await back.nextView(() => true, 2000);
+      const dealt2 = await startHand(alice.cookie);
+      back.close();
+      expect(seatOf(dealt2, ghost)).toBeDefined();
+      // Exactly: so a rule that waited for one more timeout goes red here.
+      await playUntil(dealt2, AWAY_STAND_TIMEOUTS);
+      expect(timeouts).toBe(AWAY_STAND_TIMEOUTS);
+
       const after = await getView(alice.cookie);
       expect(after.hand!.winners).not.toBeNull();
       expect(seatOf(after, ghost)).toBeUndefined();

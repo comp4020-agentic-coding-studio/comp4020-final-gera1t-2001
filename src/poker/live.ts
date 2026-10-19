@@ -18,7 +18,10 @@ export const SSE_RETRY_MS = 2_000;
 export const TURN_TIMEOUT_SECONDS = Number(process.env.TURN_TIMEOUT_SECONDS ?? 30);
 
 // --- Presence and ghost seats (owner decision, 18 Oct; final brief Step 4) --
-// The owner may tune these after a real game.
+// The owner may tune these after a real game. The two stand-up numbers were
+// raised before the first deploy (19 Oct): phones drop the stream whenever
+// the app goes to the background, and standing up resets chips, so they have
+// to be long enough that answering a message doesn't cost anyone their stack.
 
 // A seated player with no open stream for this long is away. Long enough that
 // a refresh or a short reconnect doesn't count.
@@ -34,7 +37,7 @@ export const AWAY_TURN_SECONDS = Number(process.env.AWAY_TURN_SECONDS ?? 5);
 
 // Stood up when the current hand ends (or, between hands, by a timer) after
 // this many timeouts in a row...
-export const AWAY_STAND_TIMEOUTS = Number(process.env.AWAY_STAND_TIMEOUTS ?? 2);
+export const AWAY_STAND_TIMEOUTS = Number(process.env.AWAY_STAND_TIMEOUTS ?? 5);
 
 // ...or once they've been away for longer than this.
-export const AWAY_STAND_MS = Number(process.env.AWAY_STAND_MS ?? 60_000);
+export const AWAY_STAND_MS = Number(process.env.AWAY_STAND_MS ?? 5 * 60_000);

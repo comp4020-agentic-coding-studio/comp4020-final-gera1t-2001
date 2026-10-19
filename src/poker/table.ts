@@ -168,8 +168,9 @@ interface Presence {
 const presenceByTable = new Map<number, Map<number, Presence>>();
 
 // Turn timeouts in a row, per table and user. Any real action resets it, and
-// so does leaving. In memory: a restart forgets it, which costs at most one
-// extra short turn before the AWAY_STAND_MS rule stands a ghost up anyway.
+// so does leaving. In memory: a restart forgets it, which costs at most
+// AWAY_STAND_TIMEOUTS - 1 extra short turns; the AWAY_STAND_MS rule still
+// stands a ghost up.
 const timeoutsInARow = new Map<number, Map<number, number>>();
 
 function presenceFor(tableId: number, userId: number): Presence {

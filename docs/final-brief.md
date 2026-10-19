@@ -88,9 +88,12 @@ Playtesting with friends found two problems.
   also clears the live table once (migration 0004), removing everyone left
   seated from testing. After that: a seated player with no open
   connection is **away**. When an away player's turn comes, the table waits
-  **5 s**, not 30 s. After **2 timeouts in a row**, or once they have been
-  away **over 60 s**, they are stood up automatically **when the current hand
-  ends** (never mid-hand). Their chips reset, as with any leave. Their seat
+  **5 s**, not 30 s. After **5 timeouts in a row**, or once they have been
+  away **over 5 minutes**, they are stood up automatically **when the current
+  hand ends** (never mid-hand). (Raised on 19 Oct, before the first deploy,
+  from 2 timeouts and 60 s: phones drop the stream whenever the app goes to
+  the background, and standing up resets chips, so the old numbers would cost
+  a friend their stack for answering a message.) Their chips reset, as with any leave. Their seat
   shows "Away" meanwhile.
 - All artwork is made in-house (CSS and inline SVG). No downloaded images,
   icon packs or card sprites. Fonts come from Google Fonts (Young Serif,
@@ -252,10 +255,10 @@ Turn deadline:
 Standing up:
 
 - When a hand ends (where `hand_results` are written), stand up every seat
-  with 2+ consecutive timeouts or away for more than 60 s
+  with 5+ consecutive timeouts or away for more than 5 minutes
   (`AWAY_STAND_MS`). Use the existing `leave()` path so the chip rule and
   the notification come for free.
-- Between hands, a seat that has been away more than 60 s is stood up by a
+- Between hands, a seat that has been away more than 5 minutes is stood up by a
   timer too, so a table with nobody playing doesn't keep ghosts.
 - The view gains `seats[].away` (boolean). It also gains a one-shot notice
   like `lastAction`, "lynx left the table (away)", so the page can say why a
@@ -270,7 +273,7 @@ ones first:
    deadline at most `AWAY_TURN_SECONDS` + 1 s away when their turn comes.
    Assert on the parsed `turnDeadline` minus now.
 2. A present player (stream open) still gets the full timeout.
-3. A player who times out twice in a row is no longer seated after that hand
+3. A player who times out 5 times in a row is no longer seated after that hand
    ends, and their seat row is gone.
 4. Closing and reopening a stream within the grace period does **not** mark
    the player away.
@@ -292,7 +295,7 @@ Check that the app boots and deals normally with no `table_state` row
 Do it on a copy of a database that has seats and a hand in progress, not
 only on a fresh one. Never edit 0001–0003.
 
-The rule numbers (5 s, 2 timeouts, 60 s, 10 s grace) are named constants.
+The rule numbers (5 s, 5 timeouts, 5 minutes, 10 s grace) are named constants.
 The owner may tune them after a real game. ADR 0004 (presence and ghost
 seats) is the owner's to write. Leave its Decision empty if you draft
 Context and Options. Two commits (red, then green), log, stop.
