@@ -1743,3 +1743,28 @@ the same reason the player sees (or `identity_changed` for the 409).
 **Curated prompt:** "Class requirement: multi-user testing with Fly logs.
 Make sure the system logs user connects/leaves, action received, broadcast,
 rejection and a snapshot sent to one user; deploy it."
+
+## 2026-10-19 16:20 — [judgement]
+
+**What happened:** The class exercise asks for
+`docs/testing/multi-user-test-report.md` with expected behaviour and
+observations for eight scenarios, including (g) scaling to two machines.
+
+**What I did instead of the obvious thing:** I wrote the expected behaviour
+for each scenario from how the app is actually built, before the live test,
+so the observations are checked against a prediction rather than written to
+fit. Scenario (g) is reasoned and not run on production: each Fly machine has
+its own volume and the live-update fan-out is in one process's memory, so a
+second machine would mean a second, empty table, and scaling back down risks
+leaving data on the wrong volume. The course's `fly.toml` also fixes the app
+at one machine.
+
+**How I knew it was right:** Every log line the report names was seen in the
+local test run for `b08de89`, and the /tables/2 behaviour follows from
+`buildView` returning undefined for an unknown table. Observations are not
+filled in yet.
+
+**Citation:** `045e515` (`docs/testing/multi-user-test-report.md`).
+
+**Curated prompt:** "Class requirement: docs/testing/multi-user-test-report.md,
+document expected behaviour and observations from the test."
