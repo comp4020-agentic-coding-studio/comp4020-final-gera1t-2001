@@ -45,6 +45,7 @@ function renderTableHtml(view: TableView): string {
         : "";
     return `<li class="seat${isTurn ? " seat-turn" : ""}${isYou ? " seat-you" : ""}" data-seat="${seatNo}">
         <div class="seat-name">${escapeHtml(seat.displayName)}${isYou ? " (you)" : ""}</div>
+        ${seat.away ? `<div class="seat-away">Away</div>` : ""}
         <div class="seat-stack">${seat.stack} chips</div>
         ${cards ? `<div class="seat-cards">${cards}</div>` : ""}
         ${lastAction}
@@ -89,7 +90,16 @@ function renderTableHtml(view: TableView): string {
       <button type="submit">Start hand</button>
     </form>`;
 
+  // Final brief Step 4: why a seat just emptied.
+  const noticeHtml =
+    view.notice?.type === "left_away"
+      ? `<p class="table-notice">${escapeHtml(
+          view.notice.players.map((p) => p.displayName).join(", "),
+        )} left the table (away).</p>`
+      : "";
+
   return `
+    ${noticeHtml}
     <div class="felt">
       <div class="community">
         <div class="pot">Pot: ${pot}</div>
@@ -182,6 +192,7 @@ const tableClientScript = String.raw`
       seatsHtml +=
         '<li class="seat' + (isTurn ? " seat-turn" : "") + (isYou ? " seat-you" : "") + '" data-seat="' + seatNo + '">' +
         '<div class="seat-name">' + esc(seat.displayName) + (isYou ? " (you)" : "") + "</div>" +
+        (seat.away ? '<div class="seat-away">Away</div>' : "") +
         '<div class="seat-stack">' + seat.stack + " chips</div>" +
         cardsHtml + lastActionHtml + "</li>";
     }
@@ -239,7 +250,16 @@ const tableClientScript = String.raw`
     if (decision !== lastDecision) typedAmount = "";
     lastDecision = decision;
 
+    var noticeHtml = "";
+    if (view.notice && view.notice.type === "left_away") {
+      noticeHtml =
+        '<p class="table-notice">' +
+        esc(view.notice.players.map(function (p) { return p.displayName; }).join(", ")) +
+        " left the table (away).</p>";
+    }
+
     root.innerHTML =
+      noticeHtml +
       '<div class="felt"><div class="community"><div class="pot">Pot: ' + pot + '</div>' +
       '<div class="board">' + (board || "<em>no community cards yet</em>") + "</div></div>" +
       '<ul class="seats">' + seatsHtml + "</ul></div>" +
@@ -530,6 +550,8 @@ const TABLE_STYLE = `
   .seats { list-style: none; display: flex; flex-wrap: wrap; gap: 0.5rem; padding: 0; margin: 0; justify-content: center; }
   .seat { background: rgba(255,255,255,0.1); border-radius: 8px; padding: 0.5rem; min-width: 7rem; max-width: 100%; box-sizing: border-box; }
   .seat-empty { opacity: 0.6; }
+  .seat-away { font-size: 0.85rem; font-style: italic; opacity: 0.8; }
+  .table-notice { margin: 0 0 0.5rem; font-style: italic; }
   .seat-turn { outline: 3px solid gold; }
   .seat-you { border: 2px solid #fff; }
   .seat-cards { margin-top: 0.25rem; }

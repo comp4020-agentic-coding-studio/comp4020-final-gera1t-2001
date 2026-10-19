@@ -31,6 +31,7 @@ import {
   currentSeq,
   getHandResults,
   leave,
+  markPresent,
   restoreSchedulersOnBoot,
   sitDown,
   startHand,
@@ -697,58 +698,63 @@ app.get("/tables/:id/events", (c) => {
   const response = streamSSE(c, async (stream) => {
     let dirty = false;
     let wake: (() => void) | undefined;
-    const unsubscribe = subscribeToTable(tableId, () => {
+    // Final brief Step 4: this stream is also what says the user is still at
+    // the table, so it's counted out on every way the stream can end (the
+    // client going away, the loop ending, or a write throwing on a closed
+    // socket). unsubscribe is safe to call more than once.
+    const unsubscribe = subscribeToTable(tableId, user.id, () => {
       dirty = true;
       wake?.();
     });
     stream.onAbort(() => unsubscribe());
+    try {
+      // Final brief Step 2: a stream opened under a session that has since
+      // ended (logged out in another tab) closes itself rather than keep
+      // pushing that user's view to a page whose cookie is no longer theirs.
+      // The browser's EventSource then reconnects with whatever the jar holds
+      // now, so the page learns it's someone else (or no one). Checked before
+      // every write, push or ping.
+      const sessionStillValid = (): boolean => userForSessionToken(token)?.id === user.id;
 
-    // Final brief Step 2: a stream opened under a session that has since
-    // ended (logged out in another tab) closes itself rather than keep
-    // pushing that user's view to a page whose cookie is no longer theirs.
-    // The browser's EventSource then reconnects with whatever the jar holds
-    // now, so the page learns it's someone else (or no one). Checked before
-    // every write, push or ping.
-    const sessionStillValid = (): boolean => userForSessionToken(token)?.id === user.id;
+      const sendView = async (): Promise<void> => {
+        const view = buildView(tableId, user.id);
+        if (view) await stream.writeSSE({ event: "view", data: JSON.stringify(view) });
+      };
 
-    const sendView = async (): Promise<void> => {
-      const view = buildView(tableId, user.id);
-      if (view) await stream.writeSSE({ event: "view", data: JSON.stringify(view) });
-    };
+      await stream.write(`retry: ${SSE_RETRY_MS}\n\n`);
+      await sendView(); // the caller's full current view, right on connect
 
-    await stream.write(`retry: ${SSE_RETRY_MS}\n\n`);
-    await sendView(); // the caller's full current view, right on connect
+      let nextPingAt = Date.now() + SSE_HEARTBEAT_MS;
+      while (!stream.aborted && !stream.closed) {
+        if (dirty) {
+          dirty = false;
+          if (!sessionStillValid()) break;
+          await sendView();
+          continue; // re-check immediately — another change may have landed while sendView() was writing
+        }
+        const waitMs = nextPingAt - Date.now();
+        if (waitMs > 0) {
+          await new Promise<void>((resolve) => {
+            const timer = setTimeout(resolve, waitMs);
+            wake = () => {
+              clearTimeout(timer);
+              resolve();
+            };
+          });
+          wake = undefined;
+        }
+        if (stream.aborted || stream.closed) break;
+        if (Date.now() < nextPingAt) continue; // woken by a push: send the view first
 
-    let nextPingAt = Date.now() + SSE_HEARTBEAT_MS;
-    while (!stream.aborted && !stream.closed) {
-      if (dirty) {
-        dirty = false;
         if (!sessionStillValid()) break;
-        await sendView();
-        continue; // re-check immediately — another change may have landed while sendView() was writing
+        // The table's current seq, so a page that somehow missed a view can
+        // tell (ping seq above what it last painted) and fetch it.
+        await stream.writeSSE({ event: "ping", data: JSON.stringify({ seq: currentSeq(tableId) }) });
+        nextPingAt = Date.now() + SSE_HEARTBEAT_MS;
       }
-      const waitMs = nextPingAt - Date.now();
-      if (waitMs > 0) {
-        await new Promise<void>((resolve) => {
-          const timer = setTimeout(resolve, waitMs);
-          wake = () => {
-            clearTimeout(timer);
-            resolve();
-          };
-        });
-        wake = undefined;
-      }
-      if (stream.aborted || stream.closed) break;
-      if (Date.now() < nextPingAt) continue; // woken by a push: send the view first
-
-      if (!sessionStillValid()) break;
-      // The table's current seq, so a page that somehow missed a view can
-      // tell (ping seq above what it last painted) and fetch it.
-      await stream.writeSSE({ event: "ping", data: JSON.stringify({ seq: currentSeq(tableId) }) });
-      nextPingAt = Date.now() + SSE_HEARTBEAT_MS;
+    } finally {
+      unsubscribe();
     }
-
-    unsubscribe();
   });
   // streamSSE sets its own Cache-Control, so these go on its response.
   // no-transform and X-Accel-Buffering: no ask proxies (and HTTPS-scanning
@@ -765,6 +771,7 @@ app.post("/tables/:id/sit", async (c) => {
   if (identityChanged) return identityChanged;
   if (!user) return c.json({ error: "Log in first." }, 401);
   if (tableId === undefined) return c.notFound();
+  markPresent(tableId, user.id); // final brief Step 4: posting counts as being here
   try {
     sitDown(tableId, user.id);
   } catch (err) {
@@ -780,6 +787,7 @@ app.post("/tables/:id/leave", async (c) => {
   if (identityChanged) return identityChanged;
   if (!user) return c.json({ error: "Log in first." }, 401);
   if (tableId === undefined) return c.notFound();
+  markPresent(tableId, user.id); // final brief Step 4: posting counts as being here
   try {
     leave(tableId, user.id);
   } catch (err) {
@@ -795,6 +803,7 @@ app.post("/tables/:id/start", async (c) => {
   if (identityChanged) return identityChanged;
   if (!user) return c.json({ error: "Log in first." }, 401);
   if (tableId === undefined) return c.notFound();
+  markPresent(tableId, user.id); // final brief Step 4: posting counts as being here
   try {
     startHand(tableId);
   } catch (err) {
@@ -813,6 +822,7 @@ app.post("/tables/:id/act", async (c) => {
   if (identityChanged) return identityChanged;
   if (!user) return c.json({ error: "Log in first." }, 401);
   if (tableId === undefined) return c.notFound();
+  markPresent(tableId, user.id); // final brief Step 4: posting counts as being here
 
   const body = await c.req.parseBody();
   const type = typeof body.type === "string" ? body.type : "";

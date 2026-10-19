@@ -8,7 +8,14 @@ import { findUserById } from "../accounts.ts";
 import { db } from "../db.ts";
 import type { Action, PublicState } from "./engine.ts";
 import { PokerEngine } from "./engine.ts";
-import { TURN_TIMEOUT_SECONDS } from "./live.ts";
+import {
+  AWAY_GRACE_MS,
+  AWAY_STAND_MS,
+  AWAY_STAND_TIMEOUTS,
+  AWAY_TURN_SECONDS,
+  BOOT_GRACE_MS,
+  TURN_TIMEOUT_SECONDS,
+} from "./live.ts";
 import { STALE_ACTION_MESSAGE, UNKNOWN_MOVE_MESSAGE, playerMessageForEngineError } from "./messages.ts";
 
 // A rejection the caller is meant to see verbatim (out-of-turn, illegal bet,
@@ -54,9 +61,19 @@ export interface LastAction {
   at: string;
 }
 
+// Final brief Step 4: who was just stood up for being away, a one-shot hint
+// like lastAction so the page can say why a seat emptied. Cleared when the
+// next hand is dealt.
+export interface TableNotice {
+  type: "left_away";
+  players: { userId: number; displayName: string }[];
+  at: string;
+}
+
 export interface TableView {
   table: PokerTable;
-  seats: { seatNo: number; userId: number; username: string; displayName: string; stack: number }[];
+  // `away`: no open stream for AWAY_GRACE_MS (final brief Step 4).
+  seats: { seatNo: number; userId: number; username: string; displayName: string; stack: number; away: boolean }[];
   // null until the table's first hand is ever dealt.
   hand: PublicState | null;
   turnDeadline: string | null;
@@ -75,6 +92,7 @@ export interface TableView {
   // page to show ("auto-folded"), cleared the moment a new action replaces
   // it. Lost on restart, which is fine: nothing correctness-bearing reads it.
   lastAction: LastAction | null;
+  notice: TableNotice | null;
   you: number | null;
   // The viewer's own display name, seated or not — so a page can say who
   // this browser is signed in as (final brief Step 2's banner).
@@ -84,6 +102,7 @@ export interface TableView {
 // In-memory, per table_id, for the same reason as `timers` below: it's a
 // transient UI hint, not game state, so it doesn't belong in table_state.
 const lastActionByTable = new Map<number, LastAction>();
+const noticeByTable = new Map<number, TableNotice>();
 
 // --- Live updates (Step 3) ---------------------------------------------
 //
@@ -103,17 +122,215 @@ export function currentSeq(tableId: number): number {
   return seqByTable.get(tableId) ?? 0;
 }
 
-export function subscribeToTable(tableId: number, listener: TableListener): () => void {
+// Final brief Step 4: subscribing is also how the table knows who is still
+// there. The returned function is safe to call more than once (the SSE route
+// calls it both on abort and when its loop ends), so a stream is counted
+// out exactly once.
+export function subscribeToTable(tableId: number, userId: number, listener: TableListener): () => void {
   let listeners = tableListeners.get(tableId);
   if (!listeners) {
     listeners = new Set();
     tableListeners.set(tableId, listeners);
   }
   listeners.add(listener);
+  streamOpened(tableId, userId);
+  let subscribed = true;
   return () => {
+    if (!subscribed) return;
+    subscribed = false;
     listeners.delete(listener);
     if (listeners.size === 0) tableListeners.delete(tableId);
+    streamClosed(tableId, userId);
   };
+}
+
+// --- Presence (final brief Step 4) ---------------------------------------
+//
+// In memory, like the listeners above: who is here isn't game state, and
+// after a restart every stream reconnects anyway. A seated player is away
+// once they've had no open stream for AWAY_GRACE_MS, measured from when
+// their last stream closed or they last posted, whichever is later. Nobody
+// has a stream right after a boot, so nobody is away before BOOT_GRACE_MS
+// has passed since BOOTED_AT; a seated player with no entry here (seated
+// before this process started, and never connected since) counts from
+// BOOTED_AT.
+//
+// What away changes: an away player's turn waits AWAY_TURN_SECONDS, and
+// they're stood up once a hand ends (or, between hands, by
+// schedulePresenceCheck's timer) after AWAY_STAND_TIMEOUTS timeouts in a row
+// or more than AWAY_STAND_MS away.
+const BOOTED_AT = Date.now();
+
+interface Presence {
+  openStreams: number;
+  lastSeenAt: number; // last stream close or POST, ms since epoch
+}
+const presenceByTable = new Map<number, Map<number, Presence>>();
+
+// Turn timeouts in a row, per table and user. Any real action resets it, and
+// so does leaving. In memory: a restart forgets it, which costs at most one
+// extra short turn before the AWAY_STAND_MS rule stands a ghost up anyway.
+const timeoutsInARow = new Map<number, Map<number, number>>();
+
+function presenceFor(tableId: number, userId: number): Presence {
+  let table = presenceByTable.get(tableId);
+  if (!table) {
+    table = new Map();
+    presenceByTable.set(tableId, table);
+  }
+  let presence = table.get(userId);
+  if (!presence) {
+    presence = { openStreams: 0, lastSeenAt: BOOTED_AT };
+    table.set(userId, presence);
+  }
+  return presence;
+}
+
+// When this user became (or will become) away; undefined while a stream is
+// open. Away iff this is <= now.
+function awaySince(tableId: number, userId: number): number | undefined {
+  const presence = presenceByTable.get(tableId)?.get(userId);
+  if (presence && presence.openStreams > 0) return undefined;
+  const lastSeenAt = presence?.lastSeenAt ?? BOOTED_AT;
+  return Math.max(lastSeenAt + AWAY_GRACE_MS, BOOTED_AT + BOOT_GRACE_MS);
+}
+
+function isAway(tableId: number, userId: number, now = Date.now()): boolean {
+  const since = awaySince(tableId, userId);
+  return since !== undefined && since <= now;
+}
+
+function streamOpened(tableId: number, userId: number): void {
+  const wasAway = isAway(tableId, userId);
+  presenceFor(tableId, userId).openStreams++;
+  presenceChanged(tableId, wasAway);
+}
+
+function streamClosed(tableId: number, userId: number): void {
+  const presence = presenceFor(tableId, userId);
+  presence.openStreams = Math.max(0, presence.openStreams - 1);
+  presence.lastSeenAt = Date.now();
+  schedulePresenceCheck(tableId);
+}
+
+// Any poker POST from a user (src/server.ts) counts as being here, stream
+// or not.
+export function markPresent(tableId: number, userId: number): void {
+  const wasAway = isAway(tableId, userId);
+  presenceFor(tableId, userId).lastSeenAt = Date.now();
+  presenceChanged(tableId, wasAway);
+}
+
+// A seat coming back changes what its `away` flag shows, so the table hears
+// about it; becoming away is handled by schedulePresenceCheck's timer.
+function presenceChanged(tableId: number, wasAway: boolean): void {
+  if (wasAway) notifyTable(tableId);
+  schedulePresenceCheck(tableId);
+}
+
+function seatsToStandUp(tableId: number, now = Date.now()): number[] {
+  const counts = timeoutsInARow.get(tableId);
+  return getSeats(tableId)
+    .filter((s) => {
+      if ((counts?.get(s.user_id) ?? 0) >= AWAY_STAND_TIMEOUTS) return true;
+      const since = awaySince(tableId, s.user_id);
+      return since !== undefined && now - since > AWAY_STAND_MS;
+    })
+    .map((s) => s.user_id);
+}
+
+// Stands up each user through leave(), so the chip rule (the stack goes with
+// the seat row) and the notification are the same as any other leave, and
+// records who went for the view's notice. Only ever called with no hand in
+// progress.
+function standUpAway(tableId: number, userIds: number[]): void {
+  const gone: TableNotice["players"] = [];
+  for (const userId of userIds) {
+    try {
+      leave(tableId, userId);
+      gone.push({ userId, displayName: displayNameFor(userId) });
+    } catch (err) {
+      // Already gone, or a hand is somehow still running: try the next seat.
+      console.error(`poker: couldn't stand up away user ${userId} at table ${tableId}`, err);
+    }
+  }
+  if (gone.length === 0) return;
+  noticeByTable.set(tableId, { type: "left_away", players: gone, at: new Date().toISOString() });
+  notifyTable(tableId);
+}
+
+function handInProgress(tableId: number): boolean {
+  const row = getTableState(tableId);
+  if (!row) return false;
+  const state = restoreEngine(row).state;
+  return state.handNumber > 0 && state.winners === null;
+}
+
+// One timer per table, armed for the next moment a seated player's presence
+// does something on its own: someone crosses into away (their seat shows it,
+// and if it's their turn the deadline is pulled in), or, between hands,
+// someone has been away more than AWAY_STAND_MS (stood up). Works from the
+// seats, not the presence map, since a ghost seated before a restart has no
+// entry there. Re-armed whenever anything it depends on changes.
+const presenceTimers = new Map<number, NodeJS.Timeout>();
+
+export function schedulePresenceCheck(tableId: number): void {
+  const existing = presenceTimers.get(tableId);
+  if (existing) clearTimeout(existing);
+  presenceTimers.delete(tableId);
+
+  const now = Date.now();
+  const running = handInProgress(tableId);
+  let next = Infinity;
+  for (const seat of getSeats(tableId)) {
+    const since = awaySince(tableId, seat.user_id);
+    if (since === undefined) continue;
+    if (since > now) next = Math.min(next, since);
+    else if (!running) next = Math.min(next, since + AWAY_STAND_MS + 1);
+  }
+  if (next === Infinity) return;
+  presenceTimers.set(
+    tableId,
+    setTimeout(() => runPresenceCheck(tableId), Math.max(0, next - now)),
+  );
+}
+
+function runPresenceCheck(tableId: number): void {
+  presenceTimers.delete(tableId);
+  try {
+    const now = Date.now();
+    // Anyone who became away since the last check: their seat's flag changed.
+    notifyTable(tableId);
+    pullInDeadlineIfAway(tableId, now);
+    if (!handInProgress(tableId)) standUpAway(tableId, seatsToStandUp(tableId, now));
+  } catch (err) {
+    console.error(`poker: presence check failed for table ${tableId}`, err);
+  }
+  schedulePresenceCheck(tableId);
+}
+
+// If the player to act has gone away mid-turn, bring their deadline in to
+// min(current, now + AWAY_TURN_SECONDS). Guarded on version so it can't land
+// on a turn that moved on, but leaves version as it is: only the deadline
+// changes, so an action already validated against this version is still
+// valid, and nothing a client compares version for has changed. The turn
+// timer stays the only thing that acts.
+function pullInDeadlineIfAway(tableId: number, now: number): void {
+  const row = getTableState(tableId);
+  if (!row || !row.turn_deadline) return;
+  const state = restoreEngine(row).state;
+  if (state.winners !== null || state.actionTo === null) return;
+  const player = state.players[state.actionTo];
+  if (!player || !isAway(tableId, Number(player.id), now)) return;
+
+  const awayDeadline = now + AWAY_TURN_SECONDS * 1000;
+  if (new Date(row.turn_deadline).getTime() <= awayDeadline) return;
+  const result = db
+    .prepare("UPDATE table_state SET turn_deadline = ? WHERE table_id = ? AND version = ?")
+    .run(new Date(awayDeadline).toISOString(), tableId, row.version);
+  if (result.changes !== 1) return;
+  scheduleTimeoutFor(tableId);
+  notifyTable(tableId);
 }
 
 function notifyTable(tableId: number): void {
@@ -180,6 +397,7 @@ export function buildView(tableId: number, viewerUserId: number | undefined): Ta
       username: user?.username ?? "(unknown)",
       displayName: user?.display_name ?? "(unknown)",
       stack: s.stack,
+      away: isAway(tableId, s.user_id),
     };
   });
 
@@ -197,6 +415,7 @@ export function buildView(tableId: number, viewerUserId: number | undefined): Ta
     seq,
     bootId: BOOT_ID,
     lastAction: lastActionByTable.get(tableId) ?? null,
+    notice: noticeByTable.get(tableId) ?? null,
     you: viewerUserId ?? null,
     youDisplayName: viewerUserId !== undefined ? (findUserById(viewerUserId)?.display_name ?? null) : null,
   };
@@ -255,6 +474,7 @@ export function sitDown(tableId: number, userId: number): void {
     table.buy_in,
   );
   notifyTable(tableId);
+  schedulePresenceCheck(tableId); // a new seat with no stream turns away on its own
 }
 
 // Chips reset when you leave (owner decision): nothing here records or
@@ -281,14 +501,20 @@ export function leave(tableId: number, userId: number): void {
     }
   }
   db.prepare("DELETE FROM seats WHERE table_id = ? AND user_id = ?").run(tableId, userId);
+  timeoutsInARow.get(tableId)?.delete(userId); // sitting down again starts from 0
   notifyTable(tableId);
+  schedulePresenceCheck(tableId);
 }
 
 // --- Turn deadline persistence -----------------------------------------
 
-function computeTurnDeadline(state: PokerEngine["state"]): string | null {
+// Final brief Step 4: a turn that starts for an away player waits
+// AWAY_TURN_SECONDS instead.
+function computeTurnDeadline(tableId: number, state: PokerEngine["state"]): string | null {
   if (state.winners !== null || state.actionTo === null) return null;
-  return new Date(Date.now() + TURN_TIMEOUT_SECONDS * 1000).toISOString();
+  const player = state.players[state.actionTo];
+  const away = player !== null && player !== undefined && isAway(tableId, Number(player.id));
+  return new Date(Date.now() + (away ? AWAY_TURN_SECONDS : TURN_TIMEOUT_SECONDS) * 1000).toISOString();
 }
 
 // Used only by startHand: a brand-new hand always replaces whatever
@@ -298,7 +524,7 @@ function computeTurnDeadline(state: PokerEngine["state"]): string | null {
 // is needed.
 function writeFreshTableState(tableId: number, engine: PokerEngine, previousVersion: number): void {
   const version = previousVersion + 1;
-  const turnDeadline = computeTurnDeadline(engine.state);
+  const turnDeadline = computeTurnDeadline(tableId, engine.state);
   db.prepare(
     `INSERT INTO table_state (table_id, snapshot, version, turn_deadline, updated_at)
      VALUES (?, ?, ?, ?, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
@@ -326,7 +552,7 @@ function writeTableStateIfVersionMatches(
   previousVersion: number,
 ): boolean {
   const version = previousVersion + 1;
-  const turnDeadline = computeTurnDeadline(engine.state);
+  const turnDeadline = computeTurnDeadline(tableId, engine.state);
   const result = db
     .prepare(
       `UPDATE table_state
@@ -345,8 +571,7 @@ function displayNameFor(userId: number): string {
 
 export function startHand(tableId: number): void {
   const table = requireTable(tableId);
-  const seats = getSeats(tableId);
-  if (seats.length < 2) throw new PokerError("Need at least 2 players seated to start a hand.");
+  if (getSeats(tableId).length < 2) throw new PokerError("Need at least 2 players seated to start a hand.");
 
   const existing = getTableState(tableId);
   if (existing) {
@@ -355,6 +580,18 @@ export function startHand(tableId: number): void {
       throw new PokerError("A hand is already in progress.");
     }
   }
+
+  // Final brief Step 4: deal in present players only. Anyone away is stood
+  // up first, the same way a hand's end stands them up. If that leaves fewer
+  // than two, those stand-ups still stand: they were away either way.
+  standUpAway(
+    tableId,
+    getSeats(tableId)
+      .filter((s) => isAway(tableId, s.user_id))
+      .map((s) => s.user_id),
+  );
+  const seats = getSeats(tableId);
+  if (seats.length < 2) throw new PokerError("Need at least 2 players seated to start a hand.");
 
   // A fresh engine each hand, seated from seats.stack — the authoritative
   // chip count between hands, carrying forward winnings/losses for anyone
@@ -373,8 +610,10 @@ export function startHand(tableId: number): void {
     writeFreshTableState(tableId, engine, existing?.version ?? 0);
   })();
   lastActionByTable.delete(tableId); // a fresh hand has no "last action" yet
+  noticeByTable.delete(tableId);
   scheduleTimeoutFor(tableId);
   notifyTable(tableId);
+  schedulePresenceCheck(tableId);
 }
 
 // --- Acting ----------------------------------------------------------
@@ -410,6 +649,7 @@ interface PreparedAction {
   handEnded: boolean;
   auto: boolean; // true if this is the turn timer's action, not a real click
   actingSeat: number; // who this action was for — see note at the call site below
+  actingUserId: number;
   actionType: string; // the engine's own ActionType string, e.g. "FOLD"
 }
 
@@ -468,6 +708,7 @@ export function prepareAction(
     handEnded: engine.state.winners !== null,
     auto,
     actingSeat,
+    actingUserId: Number(playerId),
     actionType: action.type,
   };
 }
@@ -483,7 +724,8 @@ export function prepareAction(
 // snapshot, the stack updates and the hand_results rows for a hand ending
 // all land together, or none of them do.
 export function commitPreparedAction(prepared: PreparedAction): void {
-  const { tableId, engine, previousVersion, stacksBeforeHand, handEnded, auto, actingSeat, actionType } = prepared;
+  const { tableId, engine, previousVersion, stacksBeforeHand, handEnded, auto, actingSeat, actingUserId, actionType } =
+    prepared;
   const newState = engine.state;
 
   const applied = db.transaction((): boolean => {
@@ -531,7 +773,24 @@ export function commitPreparedAction(prepared: PreparedAction): void {
     auto,
     at: new Date().toISOString(),
   });
+
+  // Final brief Step 4: timeouts in a row, per player. A real action resets
+  // the count.
+  let counts = timeoutsInARow.get(tableId);
+  if (!counts) {
+    counts = new Map();
+    timeoutsInARow.set(tableId, counts);
+  }
+  counts.set(actingUserId, auto ? (counts.get(actingUserId) ?? 0) + 1 : 0);
+
   notifyTable(tableId);
+
+  // A hand that just ended stands up its ghosts: AWAY_STAND_TIMEOUTS
+  // timeouts in a row, or away more than AWAY_STAND_MS. Never mid-hand.
+  if (handEnded) {
+    standUpAway(tableId, seatsToStandUp(tableId));
+    schedulePresenceCheck(tableId);
+  }
 }
 
 // The one path every real action AND every auto (timeout) action goes
@@ -629,4 +888,8 @@ function runTimeout(tableId: number): void {
 export function restoreSchedulersOnBoot(): void {
   const rows = db.prepare("SELECT table_id FROM table_state").all() as { table_id: number }[];
   for (const row of rows) scheduleTimeoutFor(row.table_id);
+  // Final brief Step 4: seated players nobody has connected as since the
+  // boot become away once BOOT_GRACE_MS is up; this arms the timer for that.
+  const seated = db.prepare("SELECT DISTINCT table_id FROM seats").all() as { table_id: number }[];
+  for (const row of seated) schedulePresenceCheck(row.table_id);
 }
