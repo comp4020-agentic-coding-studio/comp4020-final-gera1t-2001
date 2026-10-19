@@ -1280,3 +1280,139 @@ re-rendered markup. The raise amount and focus survive re-renders.
 
 **Curated prompt:** "Do Step 3 only. Report what you verified and what you
 didn't, then stop."
+
+## 2026-10-19 — [judgement]
+
+**What happened:** Final brief Step 4, red commit. Four failing tests for
+ghost seats, plus the named constants they read (`src/poker/live.ts`;
+`TURN_TIMEOUT_SECONDS` moved there so the spec can import it without
+opening the database). No behaviour changed.
+
+**What I did instead of the obvious thing:**
+- **Test 3 also asserts the away deadline.** The brief says that with
+  presence forced to "always present", tests 1 and 3 must go red and
+  nothing else. But "times out twice, then stood up at hand end" doesn't
+  depend on presence: two timeouts stand a player up either way. As
+  written, test 3 would have stayed green, or gone red only by running out
+  of time. So test 3 also checks that every ghost turn after the first
+  has a parsed `turnDeadline` − now ≤ `AWAY_TURN_SECONDS` + 1 s. An Opus
+  second opinion agreed. This partly overlaps test 1.
+- **Held streams for the existing two-player tests.** After this step, a
+  player with no stream is away and gets a 5 s turn, but tests 7 and 8
+  wait out a full 30 s turn. Both players in that block now hold a
+  stream for the whole test (`connectSse` already reconnects on a drop).
+- **Test 3 pins who acts first.** A fresh engine puts the button on the
+  lowest occupied seat (`moveButton` in `@pokertools/engine`'s
+  `actions/dealing.js`), so the first player to sit acts first preflop.
+  If the ghost acted first, their first timeout would fold and end the
+  hand, so two timeouts in a row could never happen. The test asserts
+  that order rather than assuming it.
+
+**How I knew it was right:** Ran against a scratch server built from this
+tree (`TURN_TIMEOUT_SECONDS=12`, 3 s graces, `AWAY_TURN_SECONDS=3`): 4
+failed, 11 passed. Tests 1 and 3 failed on the deadline ("expected 11998
+to be less than or equal to 4000"). Tests 2 and 4 failed because
+`seats[].away` didn't exist yet.
+
+**Citation:** `97a4e0d` (`spec/poker.test.ts`, `src/poker/live.ts`).
+
+**Curated prompt:** "Do Step 4 only. Commit the red tests first, then the
+fix. Test migration 0004 on a copy of a database that has seats and a
+hand in progress, not only on a fresh one."
+
+## 2026-10-19 — [judgement]
+
+**What happened:** Final brief Step 4, green commit. In-memory presence
+per table; away players get a 5 s turn, or have their turn pulled in to
+5 s if they go away mid-turn. Ghosts are stood up at hand end, before a
+deal, and between hands by a timer. The view carries `seats[].away` and a
+one-shot `notice`. Migration 0004 clears table 1 once.
+
+**What I did instead of the obvious thing:**
+- **The pull-in doesn't bump `version`.** It's a version-guarded UPDATE
+  of `turn_deadline` only. Tests 4 and 9 assert `version` is unchanged,
+  and their players hold no stream, so a bump landing between their two
+  reads would make them flaky. A shorter deadline also doesn't invalidate
+  an action already validated against that version. `seq` still bumps,
+  so pages re-render. (From the Opus review.)
+- **The 60 s counts from when the player became away**, i.e.
+  `max(last seen + AWAY_GRACE_MS, boot + BOOT_GRACE_MS)`, not from when
+  their stream closed. Counting from the close would stand people up
+  after about 50 s away.
+- **The presence timer works from `seats`, not the presence map, and is
+  armed at boot.** A ghost seated before a restart has no map entry; it's
+  exactly the seat the boot-grace rule has to catch.
+- **The SSE route unsubscribes in a `finally`, and unsubscribe can run
+  twice safely.** Without that, a write throwing on a closed socket would
+  skip the unsubscribe and leave the user counted as present forever,
+  which is the bug this step fixes.
+- **Timeout counts are in memory, keyed by user, and cleared on leave.**
+  A restart forgets them; the 60 s rule is the backstop.
+- **The page shows "Away" and the notice.** The owner decision says the
+  seat shows "Away" meanwhile, and the brief's checks don't cover that, so
+  I added a minimal label to the current page (Step 7 rebuilds it).
+
+**How I knew it was right:**
+- `pnpm check` at default timings (30 s turn, 10 s grace, 30 s boot
+  grace), scratch server on a fresh DB: typecheck + 31/31. Also 31/31
+  with short timings.
+- Non-vacuous: with `awaySince()` temporarily returning "never away",
+  exactly tests 1 and 3 went red ("expected 11999 to be less than or equal
+  to 4000") and 29 passed. Reverted; `grep` confirms no trace remains.
+- **Migration 0004 on a copy with seats and a hand in progress:** I
+  backed up `data/dev.sqlite3`. The pre-fix code (`97a4e0d`, in a scratch
+  worktree) ran on the copy: 3 seats (one a ghost left from my "before"
+  probe), a hand dealt, one call made (PREFLOP, seat 1 to act, deadline
+  set, version 717). Then I killed it with `kill -9`. The fixed code
+  booted on that file:
+  - 0004 was recorded in `schema_migrations`; table 1 had 0 `seats` and
+    0 `table_state` rows. `hand_results` (394), `users` (461) and
+    `poker_tables` were unchanged. No timer error in the log.
+  - It dealt normally from no `table_state` row: view version 0, then
+    1 after start, fresh 1000 stacks, a 30 s deadline. A fold ended the
+    hand and wrote 2 `hand_results` rows (396). The line that makes a
+    missing row version 0 is `src/poker/table.ts:610`,
+    `writeFreshTableState(tableId, engine, existing?.version ?? 0);`.
+  - A second boot on the same file didn't re-apply 0004: one
+    `schema_migrations` row, and the seats and hand from the first boot
+    were still there.
+- **Boot grace and the between-hands timer**, timed from process start
+  with default numbers, 2 seated users with no streams: present until
+  boot+30.4 s, then away; stood up with the `left_away` notice at
+  boot+90.2 s.
+- **Probe, with one extra seated account whose stream is never opened**
+  (8 actions, default timings; 8080 for "before", a scratch server for
+  "after"):
+
+  | | Before (Step 3 code) | After, ghost away at deal | After, ghost dealt in, then away |
+  |---|---|---|---|
+  | Hand 1 | 30.2 s | 0.03 s (stood up at deal) | 15.0 s (30 s turn pulled in to 5 s once away) |
+  | Hand 2 | 29.5 s | 0.01 s | 0.01 s (stood up at next deal) |
+  | Delivery median / max | 5 / 6 ms | 3 / 5 ms | 3 / 4 ms |
+  | Missed | 0/8 | 0/8 | 0/8 |
+
+- Browser (headless Chromium, 1920×1080 and 390×844): the ghost's seat
+  showed "Away" 10.0 s after they sat, with no reload (1 navigation).
+  Start hand stood them up and showed "… left the table (away)."
+  Horizontal overflow 0 at both sizes; I looked at the screenshots.
+
+**Not checked:**
+- Production: not pushed. The brief pushes only after owner approval,
+  and the deploy runs 0004 against the live table.
+- A real CI run (Docker image, `--tmpfs /data`). The local runs used
+  `node src/server.ts`, with the same defaults CI uses.
+- The "2 timeouts in a row" path in a real browser (covered only by
+  test 3), and the mid-turn pull-in in a browser (only via the probe and
+  test 1).
+- Mid-turn pull-in racing a real action in the same millisecond. Read
+  from the code: the guarded UPDATE no-ops if the version moved.
+- ADR 0004 is not drafted (the owner's to write).
+
+**Citation:** `a5a7de6` (`src/poker/table.ts`, `src/server.ts`,
+`src/poker/page.ts`, `migrations/0004_clear_table_1.sql`); `97a4e0d`
+(tests).
+
+**Curated prompt:** "Do Step 4 only. Commit the red tests first, then the
+fix. Test migration 0004 on a copy of a database that has seats and a
+hand in progress... Report what you verified and what you didn't, then
+stop and wait for me. Don't push until I approve."
