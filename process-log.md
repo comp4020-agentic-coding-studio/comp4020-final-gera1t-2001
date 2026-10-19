@@ -1672,3 +1672,39 @@ wrong password".
 one with a wrong password return identical HTML, error placement included,
 apart from the echoed username. Add a test for it, and prove the test isn't
 vacuous."
+
+## 2026-10-19 — [routine]
+
+**What happened:** The Opus review of `7d3eb2f` found two defects that this
+commit introduced. Both are fixed here.
+- A failed register submit marked each select's own chosen question
+  `disabled` when the same question was picked twice, so the next POST sent
+  no question at all and the person saw "Choose question N to continue".
+- The recovery question count was defined in two places
+  (`accounts.ts` and `account-messages.ts`).
+
+**What I did instead of the obvious thing:** I reproduced the first one in
+headless Chromium before changing code: both selects held a disabled selected
+option and `FormData` listed no `question_*` keys. The fix is in the server
+render and in the client-side exclusion: a select never disables the option it
+currently holds. I deleted the duplicate constant from `accounts.ts`; nothing
+else imported it. I did not touch the older weaknesses the review reported,
+because the brief says to keep today's protections as they are (listed in the
+report to the owner).
+
+**How I knew it was right:**
+- New test, red before the fix and green after.
+- Proved non-vacuous: I restored the old server rule, that test alone went
+  red, and I reverted.
+- Browser: the same-question-twice re-render now submits both
+  `question_1` and `question_2`, and the live exclusion still behaves at both
+  viewports.
+- `pnpm check`: typecheck clean, 39/39.
+
+**Citation:** `08a2d3e` (`src/account-pages.ts`, `src/accounts.ts`,
+`spec/accounts.test.ts`). Check name that went red → green: "a re-rendered
+register form hides each question from the other select but never disables its
+own choice".
+
+**Curated prompt:** "Run the Opus subagent review the brief requires for
+Step 6... Commit any fixes with log entries. Don't push."
