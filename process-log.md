@@ -1197,3 +1197,86 @@ separate browser contexts... sit both, deal, play one hand to showdown and
 one to a fold. No 409, no banner, every action shows on the other side.
 2. Run the Step 1 probe against the local app... 3. Tab through the banner
 and its Reload button at 390x844."
+
+## 2026-10-19 — [judgement]
+
+**What happened:** Final brief Step 3. The heartbeat is now a named `ping`
+event every 5 s. Views carry `seq`/`bootId`, and the page renders only
+views at least as new as the last one painted. A 12 s watchdog plus
+1.5 s polling recovers a silent or dead stream without a reload. A
+connection pill (Live / Reconnecting… / Offline) sits outside the
+re-rendered markup. The raise amount and focus survive re-renders.
+
+**What I did instead of the obvious thing:**
+- **Pill states.** The first version showed Offline whenever a poll
+  failed. During the brief's own kill-the-server check, that flipped to
+  Offline within 0.1 s and stayed there, never showing Reconnecting.
+  Flagged by an Opus review, confirmed in the browser log. Offline now
+  means the browser reports no network, or nothing has answered for 30 s.
+  A server restart reads as Reconnecting.
+- **Polls time out after 4 s.** A hung server (simulated with SIGSTOP:
+  sockets stay open but nothing arrives, the production failure mode)
+  can't leave a poll pending forever.
+- **Session check on every write.** The SSE loop, rewritten around a
+  fixed ping schedule, had moved Step 2's session check to ping time only.
+  It now runs before every write, push or ping.
+- **Raise amount scoped to one decision.** Keeping it "across renders"
+  would otherwise carry a typed 50 into the player's next turn.
+- **Ping data is the table's `seq`,** not a per-connection counter, so a
+  page can tell it missed a view and fetch it.
+- **Timings in `src/poker/live.ts`.** It imports nothing, so the spec can
+  import `SSE_HEARTBEAT_MS` without starting the server or opening the DB.
+
+**How I knew it was right:**
+- `pnpm check` green: 4 files, 27/27 tests (new tests 10 and 11).
+- Non-vacuous (ping): with the ping temporarily written as a comment
+  again, test 10 went red ("timed out after 6000ms waiting for any SSE
+  event") and test 11 stayed green; reverted.
+- Non-vacuous (seq gate, in a real browser): a POST response rewritten to
+  an older view (2 seated) arriving after a newer push (3 seated) left the
+  page at 3. With the gate disabled it painted 2; reverted.
+- Raw stream: `retry: 2000` first, pings at +5.0 s and +10.0 s carrying
+  the table seq, both headers present. A logged-out stream ends at the
+  next ping (5.0 s), or within 6 ms if a push arrives first, with no
+  further view sent.
+- Watchdog, headless Chromium at 1920×1080 and 390×844:
+  - **Server killed for 20 s:** Live → Reconnecting… within 0.1 s, held
+    through the outage, Live 0.6 s after restart. B's new deal then
+    showed on A's page with no reload (1 navigation entry).
+  - **Server SIGSTOPped for 20 s:** the pill stayed Live until the
+    watchdog fired at 12 s, then Reconnecting, then Live on resume.
+  - **Longer outage (35 s):** Offline at 30 s, recovered on restart.
+  - **Browser `setOffline`:** Offline at once, Live within 0.1 s of
+    coming back online.
+  - No horizontal scroll at either size.
+- Re-renders: a typed raise amount ("60") kept its value and focus across
+  a push, and typing continued in the field ("605"). Focus on Call
+  survived a push. The amount cleared once the turn moved on.
+- The Step 2 banner paths (post, push, signed out) re-run at 390×844,
+  all still correct.
+
+**Probe (local, `PROBE_ACTIONS=20`), next to Step 1's:**
+
+| | Step 1 | Step 3 |
+|---|---|---|
+| Delivery median | 4–5 ms | 3 ms |
+| Delivery p95 | 10 ms | 6 ms |
+| Delivery max | 10 ms | 9 ms |
+| Missed | 0 | 0/20 |
+| Idle-hold max gap | 10001 ms | 5006 ms (heartbeat now 5 s), no STALL |
+
+**Not checked:**
+- Production: not pushed; the brief pushes only after owner approval.
+- A real proxy (Fly's) killing or buffering the stream. The local
+  kill/SIGSTOP stand in for it.
+- `visibilitychange`/`pageshow` re-fetch was not exercised in the browser
+  (only read).
+- Pill colours copy the mockup tokens as literals until Step 5's token
+  stylesheet exists.
+
+**Citation:** `dbf2c4e` (`src/poker/live.ts`, `src/poker/page.ts`,
+`src/poker/table.ts`, `src/server.ts`, `spec/poker.test.ts`,
+`scripts/latency-probe.ts`).
+
+**Curated prompt:** "Do Step 3 only. Report what you verified and what you
+didn't, then stop."
