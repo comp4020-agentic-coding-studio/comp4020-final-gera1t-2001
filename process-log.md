@@ -1595,3 +1595,51 @@ restores it. The `"results"` `NavItem` stays, for Step 8.
 **Curated prompt:** "Hide the Results nav link until Step 8 builds
 /results. Owner-approved README edit: change only the first line from
 '# no name' to '# House Game'."
+
+## 2026-10-19 — [judgement]
+
+**What happened:** Step 6: log in, register, forgot and reset password were
+rebuilt from the mockups. Every rule and message now lives in
+`src/account-messages.ts`; `src/account-pages.ts` only lays them out.
+Both log-in and register now land on `/tables/1` by default.
+
+**What I did instead of the obvious thing:**
+- The checklist's five rules are data (a regex source per rule) that the
+  server and the page script both read, instead of the script carrying its
+  own copy of the rules.
+- The generic wrong-login message sits under the password field, not the
+  username. The first version put it on the username; I moved it after
+  seeing the render, because the password is the box the person has to retype.
+- `normaliseAnswer()` (`src/accounts.ts`) is
+  `answer.trim().toLowerCase().replace(/\s+/g, " ")`, so the register page's
+  "Capitals and extra spaces don't matter" is true.
+
+**How I knew it was right:**
+- `pnpm check`: typecheck clean, 38/38 tests.
+- Non-vacuous: I removed the error id from `aria-describedby`. 7 tests went
+  red (the five per-rule password tests, the failed-register DOM test and the
+  select-exclusion test). I reverted and confirmed with `diff`.
+- Headless Chromium at 1920×1080 and 390×844, over HTTP:
+  - `scrollWidth - innerWidth` was 0 on login, register, their error
+    states, forgot and reset.
+  - Tab order was header, then fields in order, then Show/Hide, then submit.
+  - Show/Hide toggled with Enter and with Space.
+  - The checklist ticked 00000 → 11111 as the password was typed.
+  - Each select disabled the other's choice.
+  - A failed submit focused the summary, showed inline errors with
+    `aria-invalid`, and kept typed values except the password.
+- Not checked in a browser: the lock-out `<time>` converted to the visitor's
+  zone; a successful reset landing on the log-in page with its note (covered
+  only by `spec/accounts.test.ts`); the profile page; the log-in and register
+  *success* redirects to `/tables/1` (covered only by the spec).
+- A mid-run slip: `pkill -f "node src/server.ts"` matched my own shell and
+  killed it with the sabotage still in the file. I confirmed the file was
+  still sabotaged, ran the red check, reverted, and diffed to confirm.
+
+**Citation:** `7d3eb2f` (`src/account-messages.ts`, `src/account-pages.ts`,
+`src/server.ts`, `src/assets/site.css`, `spec/accounts.test.ts`). Check name
+that went red → green: "a failed register shows the field's error inside
+that field's aria-describedby target".
+
+**Curated prompt:** "Do Step 6 only. Report what you verified and what you
+didn't, then stop and wait for me. Don't push."
