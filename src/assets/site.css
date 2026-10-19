@@ -1,0 +1,141 @@
+/* House Game's one stylesheet, linked from every page by src/html.ts.
+   Tokens are copied verbatim from docs/design/table-mockup.html, plus --ink-2
+   and --rule from docs/design/auth.css. Do not invent a second palette.
+   A home game at night: a dark room, one pendant lamp, a lit felt table.
+   Brass is reserved for "now" (whose turn, the dealer button, your seat);
+   card red is only ever a suit colour. */
+:root {
+  --room: #23262b;        /* the room around the table */
+  --room-2: #2c3036;      /* raised surfaces in the room: header, dock */
+  --line: #3a3f46;        /* hairlines on room surfaces */
+  --text: #ebe8e2;        /* text on the room */
+  --muted: #a1a7ae;       /* secondary text on the room */
+  --felt: #1d5a44;        /* table baize at the edge */
+  --felt-lit: #2f7d5e;    /* baize under the lamp */
+  --rail: #4a3022;        /* walnut rail */
+  --rail-hi: #6b4631;
+  --card: #fbfaf6;        /* card stock, also form "paper" */
+  --ink: #1c1e21;         /* black suits, text on paper */
+  --ink-2: #5b6168;       /* secondary text on paper */
+  --rule: #dedbd2;        /* hairlines on paper */
+  --red: #c0302a;         /* red suits */
+  --brass: #e2b24f;       /* now: turn ring, dealer button, you */
+  --brass-ink: #2a1f08;
+  --ok: #6fcf97;
+  --serif: "Young Serif", Georgia, serif;
+  --sans: "Atkinson Hyperlegible Next", "Atkinson Hyperlegible", system-ui, sans-serif;
+}
+
+/* ---- Base ---- */
+* { box-sizing: border-box; }
+html, body { margin: 0; }
+body {
+  background: var(--room);
+  color: var(--text);
+  font: 16px/1.5 var(--sans);
+  font-variant-numeric: tabular-nums;
+  min-height: 100vh;
+}
+:focus-visible { outline: 3px solid var(--brass); outline-offset: 2px; }
+a { color: var(--text); text-decoration-color: var(--muted); text-underline-offset: .15em; }
+a:hover { text-decoration-color: var(--text); }
+h1, h2, h3 { font-family: var(--serif); font-weight: 400; line-height: 1.2; }
+/* The header's gutter, for a page whose <main> brings no layout of its own.
+   .column, .auth and the table page set their own padding over this. */
+main { padding: 0 clamp(1rem, 3vw, 2rem) 2rem; }
+/* A <select>'s closed box sizes to its longest <option> text by default,
+   which on narrow screens can push it (and so the whole page) wider than the
+   viewport. This caps every form control to its container instead. */
+input, select, textarea, button { max-width: 100%; }
+select { text-overflow: ellipsis; }
+
+/* ---- Header ---- */
+.site-head {
+  display: flex; align-items: center; gap: 1rem; flex-wrap: wrap;
+  padding: .75rem clamp(1rem, 3vw, 2rem);
+  border-bottom: 1px solid var(--line);
+}
+.wordmark { font: 1.5rem/1 var(--serif); color: var(--text); text-decoration: none; }
+.site-nav { display: flex; flex-wrap: wrap; gap: .5rem 1.25rem; margin-left: auto; align-items: center; }
+.site-nav a { color: var(--muted); text-decoration: none; }
+.site-nav a:hover, .site-nav a[aria-current="page"] { color: var(--text); }
+/* Log out is a POST, so it's a button made to read as one more nav link. */
+.site-nav form { display: contents; }
+.site-nav button {
+  font: inherit; color: var(--muted); background: none; border: 0; padding: 0; cursor: pointer;
+}
+.site-nav button:hover { color: var(--text); }
+/* The connection pill (final brief Step 3): a dot coloured by state. */
+.conn { display: inline-flex; align-items: center; gap: .4rem; font-size: .875rem; color: var(--muted); }
+.conn::before { content: ""; flex: none; width: .55rem; height: .55rem; border-radius: 50%; background: var(--ok); }
+.conn[data-state="reconnecting"]::before { background: var(--brass); }
+.conn[data-state="offline"]::before { background: var(--red); }
+.conn[hidden] { display: none; }
+
+/* ---- A readable column on the room colour (About, Home) ---- */
+.column { max-width: 70ch; margin: 0 auto; padding: 2rem clamp(1rem, 3vw, 2rem) 4rem; }
+.column img, .column video { max-width: 100%; height: auto; }
+.column pre { overflow-x: auto; background: var(--room-2); padding: .75rem 1rem; border-radius: .5rem; }
+.column code { font-size: .92em; }
+.column table { display: block; overflow-x: auto; border-collapse: collapse; }
+.column th, .column td { border: 1px solid var(--line); padding: .3rem .6rem; }
+.column hr { border: 0; border-top: 1px solid var(--line); }
+
+/* ---- Paper-panel forms, from docs/design/auth.css ----
+   Scoped to .panel so they never restyle the table page's own controls. */
+.auth { padding: 3.5rem 1rem 4rem; display: grid; justify-items: center; }
+.panel {
+  width: 100%; max-width: 30rem; background: var(--card); color: var(--ink);
+  border-radius: 1rem; padding: 2.25rem clamp(1.25rem, 5vw, 2.25rem) 2rem;
+  box-shadow: 0 30px 60px rgba(0,0,0,.35);
+}
+.panel h1 { font: 2rem/1.15 var(--serif); margin: 0 0 .35rem; }
+.panel h2 { font: 1.15rem var(--serif); margin: 1.75rem 0 .5rem; padding-top: 1.5rem; border-top: 1px solid var(--rule); }
+.panel a { color: var(--ink); }
+.lede { margin: 0 0 1.5rem; color: var(--ink-2); }
+
+.panel fieldset { border: 0; padding: 0; margin: 0 0 1.75rem; }
+.panel fieldset + fieldset { border-top: 1px solid var(--rule); padding-top: 1.5rem; }
+.panel legend { font: 1.15rem var(--serif); padding: 0; margin-bottom: .25rem; }
+.why { margin: 0 0 1rem; color: var(--ink-2); font-size: .95rem; }
+
+.field { margin-bottom: 1.1rem; }
+.field label { display: block; font-weight: 700; margin-bottom: .3rem; }
+.field label .opt { font-weight: 400; color: var(--ink-2); }
+.hint { display: block; font-size: .9rem; color: var(--ink-2); margin-top: .3rem; }
+.panel input[type=text], .panel input[type=password], .panel select, .panel textarea {
+  width: 100%; font: 1rem var(--sans); color: var(--ink); background: #fff;
+  border: 2px solid #c9c5ba; border-radius: .6rem; padding: .65rem .8rem; min-height: 3rem;
+}
+.panel textarea { min-height: 4.5rem; resize: vertical; }
+.panel input:focus, .panel select:focus, .panel textarea:focus {
+  outline: none; border-color: var(--ink); box-shadow: 0 0 0 3px rgba(226,178,79,.55);
+}
+.field.invalid input, .field.invalid select { border-color: var(--red); }
+.field-error { display: flex; gap: .4rem; color: var(--red); font-weight: 700; font-size: .92rem; margin-top: .35rem; }
+.field-error::before {
+  content: "!"; display: inline-grid; place-items: center; width: 1.15rem; height: 1.15rem; border-radius: 50%;
+  background: var(--red); color: #fff; font-size: .75rem; flex: none; margin-top: .15rem;
+}
+
+.primary {
+  width: 100%; min-height: 3.25rem; font: 700 1.05rem var(--sans); color: var(--brass-ink);
+  background: var(--brass); border: 0; border-radius: .7rem; cursor: pointer;
+}
+.primary:hover { filter: brightness(1.05); }
+.links { margin: 1.25rem 0 0; display: grid; gap: .4rem; text-align: center; color: var(--ink-2); }
+.links a { color: var(--ink); font-weight: 700; }
+
+/* Its own colours, so it reads the same on paper and on the room. */
+.summary {
+  border-left: 4px solid var(--red); background: #fbeeed; color: var(--ink);
+  padding: .75rem 1rem; border-radius: .4rem; margin-bottom: 1.5rem;
+}
+.summary strong { display: block; margin-bottom: .2rem; }
+.summary ul { margin: 0; padding-left: 1.1rem; }
+.summary a { color: var(--red); }
+
+@media (max-width: 640px) {
+  .site-nav { margin-left: 0; width: 100%; gap: .4rem .9rem; font-size: .9rem; }
+  .auth { padding-top: 2.5rem; }
+}

@@ -5,6 +5,7 @@
 // renderers are deliberately similar in shape — one in TypeScript for the
 // first paint, one in JavaScript for live updates — rather than one trying
 // to serve both a server template and a browser runtime.
+import type { User } from "../accounts.ts";
 import { escapeHtml, page } from "../html.ts";
 import type { TableView } from "./table.ts";
 
@@ -575,25 +576,18 @@ const TABLE_STYLE = `
                      align-items: center; }
   .identity-banner p { margin: 0; flex: 1 1 20rem; }
   .identity-banner[hidden] { display: none; }
-  .table-header { display: flex; flex-wrap: wrap; align-items: center; gap: 0.25rem 1rem; }
-  .table-header h1 { margin-right: auto; }
-  /* The mockup's .conn: a dot coloured by state. */
-  .conn { display: inline-flex; align-items: center; gap: 0.4rem; font-size: 0.875rem; }
-  .conn::before { content: ""; flex: none; width: 0.55rem; height: 0.55rem; border-radius: 50%; background: #6fcf97; }
-  .conn[data-state="reconnecting"]::before { background: #e2b24f; }
-  .conn[data-state="offline"]::before { background: #c0302a; }
-  .conn[hidden] { display: none; }
+  .table-page { padding: 0 clamp(1rem, 3vw, 2rem) 2rem; }
 `;
 
-export function renderTablePage(view: TableView): string {
+// The connection pill (final brief Step 3) sits in the layout's header nav,
+// as in the mockup, which keeps it outside #table-root.
+const CONN_PILL = `<span id="conn-pill" class="conn" data-state="reconnecting" role="status">Reconnecting…</span>`;
+
+export function renderTablePage(view: TableView, user: User): string {
   const body = `
     <style>${TABLE_STYLE}</style>
-    <main data-table-id="${view.table.id}">
-      <div class="table-header">
-        <h1>${escapeHtml(view.table.name)}</h1>
-        <span id="conn-pill" class="conn" data-state="reconnecting" role="status">Reconnecting…</span>
-      </div>
-      <p><a href="/">Home</a></p>
+    <main class="table-page" data-table-id="${view.table.id}">
+      <h1>${escapeHtml(view.table.name)}</h1>
       <div id="identity-banner" class="identity-banner" role="alert" hidden>
         <p data-banner-text></p>
         <button type="button" id="identity-reload">Reload</button>
@@ -607,7 +601,7 @@ export function renderTablePage(view: TableView): string {
   // Step 2), and a view whose "you" differs means the cookie changed hands.
   // data-seq/data-boot-id are this first paint's place in the seq order
   // (Step 3), so a slower, older response can't replace it either.
-  return page(view.table.name, body).replace(
+  return page("Table", body, { user, current: "table", navExtra: CONN_PILL }).replace(
     "<body>",
     `<body data-table-id="${view.table.id}" data-viewer-id="${view.you ?? ""}" data-viewer-name="${escapeHtml(view.youDisplayName ?? "")}" data-seq="${view.seq}" data-boot-id="${escapeHtml(view.bootId)}">`,
   );

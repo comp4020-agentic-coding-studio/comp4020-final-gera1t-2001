@@ -21,7 +21,7 @@ import {
 } from "./accounts.ts";
 import type { User } from "./accounts.ts";
 import { hashSecret, spendDummyVerify, verifySecret } from "./crypto.ts";
-import { errorList, escapeHtml, page } from "./html.ts";
+import { FAVICON_SVG, SITE_CSS, SITE_CSS_VERSION, errorList, escapeHtml, page } from "./html.ts";
 import { SSE_RETRY_MS, SSE_HEARTBEAT_MS } from "./poker/live.ts";
 import { renderTablePage } from "./poker/page.ts";
 import {
@@ -108,22 +108,21 @@ function safeNextPath(raw: unknown): string | undefined {
   return raw;
 }
 
-function nav(user: User | undefined, next?: string): string {
-  // Carried onto the logged-out links too, so a visitor who lands on /login
-  // from a protected page and then switches to /register (or back) doesn't
-  // lose where they were headed.
-  const suffix = next ? `?next=${encodeURIComponent(next)}` : "";
-  return user
-    ? `<nav>
-        <a href="/">Home</a> | <a href="/tables/1">Table</a> | <a href="/readme/">About</a> | <a href="/profile">My profile</a> |
-        <form method="post" action="/logout" style="display:inline">
-          <button type="submit">Log out</button>
-        </form>
-      </nav>`
-    : `<nav><a href="/">Home</a> | <a href="/tables/1">Table</a> | <a href="/readme/">About</a> | <a href="/login${suffix}">Log in</a> | <a href="/register${suffix}">Register</a></nav>`;
-}
-
 const app = new Hono();
+
+// The layout's stylesheet (src/html.ts links it as ?v=<content hash>). A
+// request for the current hash can be cached for good, since the next deploy
+// that changes the file changes the URL; anything else (an old hash, or none)
+// is revalidated every time, so a stale copy is never served.
+app.get("/assets/site.css", (c) => {
+  const cacheControl =
+    c.req.query("v") === SITE_CSS_VERSION ? "public, max-age=31536000, immutable" : "no-cache";
+  return c.body(SITE_CSS, 200, { "content-type": "text/css; charset=utf-8", "cache-control": cacheControl });
+});
+
+app.get("/favicon.svg", (c) =>
+  c.body(FAVICON_SVG, 200, { "content-type": "image/svg+xml", "cache-control": "no-cache" }),
+);
 
 app.get("/", (c) => {
   const members = listMembers();
@@ -135,13 +134,13 @@ app.get("/", (c) => {
     .join("");
   return c.html(
     page(
-      "comp4020-final",
-      `${nav(currentUser(c))}
-      <main>
+      null,
+      `<main class="column">
         <h1>Members</h1>
         <p>A Texas Hold'em table for friends. <a href="/tables/1">Join the table</a>.</p>
         ${members.length > 0 ? `<ul>${items}</ul>` : "<p>No one has registered yet.</p>"}
       </main>`,
+      { user: currentUser(c) },
     ),
   );
 });
@@ -150,7 +149,12 @@ app.get("/readme", (c) => c.redirect("/readme/", 301));
 
 app.get("/readme/", (c) => {
   const markdown = readFileSync(resolve(projectRoot, "README.md"), "utf8");
-  return c.html(page("About this app", `<main>${marked.parse(markdown, { async: false })}</main>`));
+  return c.html(
+    page("About", `<main class="column">${marked.parse(markdown, { async: false })}</main>`, {
+      user: currentUser(c),
+      current: "about",
+    }),
+  );
 });
 
 // Relative links in README.md (e.g. an image) resolve against /readme/ once
@@ -234,7 +238,7 @@ app.get("/register", (c) => {
   const next = safeNextPath(c.req.query("next"));
   if (currentUser(c)) return c.redirect(next ?? "/profile", 303);
   return c.html(
-    page("Register", `${nav(undefined, next)}<main><h1>Register</h1>${registerForm([], {}, next)}</main>`),
+    page("Register", `<main><h1>Register</h1>${registerForm([], {}, next)}</main>`, { current: "register", next }),
   );
 });
 
@@ -287,7 +291,10 @@ app.post("/register", async (c) => {
 
   if (errors.length > 0) {
     return c.html(
-      page("Register", `${nav(undefined, next)}<main><h1>Register</h1>${registerForm(errors, values, next)}</main>`),
+      page("Register", `<main><h1>Register</h1>${registerForm(errors, values, next)}</main>`, {
+        current: "register",
+        next,
+      }),
       400,
     );
   }
@@ -328,7 +335,9 @@ function loginForm(error: string | undefined, username: string, next?: string): 
 app.get("/login", (c) => {
   const next = safeNextPath(c.req.query("next"));
   if (currentUser(c)) return c.redirect(next ?? "/profile", 303);
-  return c.html(page("Log in", `${nav(undefined, next)}<main><h1>Log in</h1>${loginForm(undefined, "", next)}</main>`));
+  return c.html(
+    page("Log in", `<main><h1>Log in</h1>${loginForm(undefined, "", next)}</main>`, { current: "login", next }),
+  );
 });
 
 app.post("/login", async (c) => {
@@ -350,10 +359,10 @@ app.post("/login", async (c) => {
 
   if (!user || !ok) {
     return c.html(
-      page(
-        "Log in",
-        `${nav(undefined, next)}<main><h1>Log in</h1>${loginForm("Invalid username or password.", username, next)}</main>`,
-      ),
+      page("Log in", `<main><h1>Log in</h1>${loginForm("Invalid username or password.", username, next)}</main>`, {
+        current: "login",
+        next,
+      }),
       400,
     );
   }
@@ -375,16 +384,16 @@ function profileForm(user: User, errors: string[]): string {
   return `
     ${errorList(errors)}
     <form method="post" action="/profile">
-      <p>
-        <label for="display_name">Display name</label><br />
+      <div class="field">
+        <label for="display_name">Display name</label>
         <input id="display_name" name="display_name" type="text" maxlength="${DISPLAY_NAME_MAX}"
           value="${escapeHtml(user.display_name)}" />
-      </p>
-      <p>
-        <label for="bio">Bio</label><br />
+      </div>
+      <div class="field">
+        <label for="bio">Bio</label>
         <textarea id="bio" name="bio" maxlength="${BIO_MAX}">${escapeHtml(user.bio)}</textarea>
-      </p>
-      <p><button type="submit">Save</button></p>
+      </div>
+      <button class="primary" type="submit">Save</button>
     </form>`;
 }
 
@@ -404,7 +413,8 @@ app.get("/profile", (c) => {
   return c.html(
     page(
       "My profile",
-      `${nav(user)}<main><h1>My profile</h1>${profileForm(user, [])}${securityQuestionsSummary(user.id)}</main>`,
+      `<main class="auth"><section class="panel"><h1>My profile</h1>${profileForm(user, [])}${securityQuestionsSummary(user.id)}</section></main>`,
+      { user, current: "profile" },
     ),
   );
 });
@@ -429,7 +439,8 @@ app.post("/profile", async (c) => {
     return c.html(
       page(
         "My profile",
-        `${nav(user)}<main><h1>My profile</h1>${profileForm({ ...user, display_name: displayNameInput, bio }, errors)}${securityQuestionsSummary(user.id)}</main>`,
+        `<main class="auth"><section class="panel"><h1>My profile</h1>${profileForm({ ...user, display_name: displayNameInput, bio }, errors)}${securityQuestionsSummary(user.id)}</section></main>`,
+        { user, current: "profile" },
       ),
       400,
     );
@@ -465,10 +476,10 @@ function resetForm(
   const answerInputs = questions
     .map(
       (q) => `
-      <p>
-        <label for="answer_${q.position}">${escapeHtml(q.question)}</label><br />
+      <div class="field">
+        <label for="answer_${q.position}">${escapeHtml(q.question)}</label>
         <input id="answer_${q.position}" name="answer_${q.position}" type="text" required maxlength="200" />
-      </p>`,
+      </div>`,
     )
     .join("");
 
@@ -477,18 +488,18 @@ function resetForm(
     <form method="post" action="/reset-password">
       <input type="hidden" name="username" value="${escapeHtml(username)}" />
       ${answerInputs}
-      <p>
-        <label for="new_password">New password</label><br />
+      <div class="field">
+        <label for="new_password">New password</label>
         <input id="new_password" name="new_password" type="password" required minlength="${PASSWORD_MIN}"
-          autocomplete="new-password" aria-describedby="new-password-rule" /><br />
-        <small id="new-password-rule">${escapeHtml(PASSWORD_RULE_HINT)}</small>
-      </p>
-      <p>
-        <label for="confirm_password">Confirm new password</label><br />
+          autocomplete="new-password" aria-describedby="new-password-rule" />
+        <small id="new-password-rule" class="hint">${escapeHtml(PASSWORD_RULE_HINT)}</small>
+      </div>
+      <div class="field">
+        <label for="confirm_password">Confirm new password</label>
         <input id="confirm_password" name="confirm_password" type="password" required
           minlength="${PASSWORD_MIN}" autocomplete="new-password" />
-      </p>
-      <p><button type="submit">Reset password</button></p>
+      </div>
+      <button class="primary" type="submit">Reset password</button>
     </form>`;
 }
 
@@ -496,14 +507,15 @@ app.get("/forgot-password", (c) =>
   c.html(
     page(
       "Forgot password",
-      `${nav(currentUser(c))}<main><h1>Forgot password</h1>
+      `<main class="auth"><section class="panel"><h1>Forgot password</h1>
       <form method="post" action="/forgot-password">
-        <p>
-          <label for="username">Username</label><br />
+        <div class="field">
+          <label for="username">Username</label>
           <input id="username" name="username" type="text" required autocomplete="username" />
-        </p>
-        <p><button type="submit">Continue</button></p>
-      </form></main>`,
+        </div>
+        <button class="primary" type="submit">Continue</button>
+      </form></section></main>`,
+      { user: currentUser(c) },
     ),
   ),
 );
@@ -514,9 +526,10 @@ app.post("/forgot-password", async (c) => {
   return c.html(
     page(
       "Reset your password",
-      `${nav(currentUser(c))}<main><h1>Reset your password</h1>
-      <p>Answer your security questions and choose a new password.</p>
-      ${resetForm(username, securityQuestionsForUsername(username), [])}</main>`,
+      `<main class="auth"><section class="panel"><h1>Reset your password</h1>
+      <p class="lede">Answer your security questions and choose a new password.</p>
+      ${resetForm(username, securityQuestionsForUsername(username), [])}</section></main>`,
+      { user: currentUser(c) },
     ),
   );
 });
@@ -534,9 +547,10 @@ app.post("/reset-password", async (c) => {
     c.html(
       page(
         "Reset your password",
-        `${nav(currentUser(c))}<main><h1>Reset your password</h1>
-        <p>Answer your security questions and choose a new password.</p>
-        ${resetForm(username, securityQuestionsForUsername(username), errors)}</main>`,
+        `<main class="auth"><section class="panel"><h1>Reset your password</h1>
+        <p class="lede">Answer your security questions and choose a new password.</p>
+        ${resetForm(username, securityQuestionsForUsername(username), errors)}</section></main>`,
+        { user: currentUser(c) },
       ),
       400,
     );
@@ -583,8 +597,9 @@ app.post("/reset-password", async (c) => {
   return c.html(
     page(
       "Password reset",
-      `${nav(currentUser(c))}<main><h1>Password reset</h1>
-      <p>Your password has been reset. <a href="/login">Log in</a> with your new password.</p></main>`,
+      `<main class="auth"><section class="panel"><h1>Password reset</h1>
+      <p class="lede">Your password has been reset. <a href="/login">Log in</a> with your new password.</p></section></main>`,
+      { user: currentUser(c) },
     ),
   );
 });
@@ -649,7 +664,7 @@ app.get("/tables/:id", (c) => {
   }
   const view = tableId !== undefined ? buildView(tableId, user.id) : undefined;
   if (!view) return c.notFound();
-  return c.html(renderTablePage(view));
+  return c.html(renderTablePage(view, user));
 });
 
 app.get("/tables/:id/view", (c) => {
