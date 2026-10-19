@@ -31,6 +31,7 @@ import {
 import type { User } from "./accounts.ts";
 import { hashSecret, spendDummyVerify, verifySecret } from "./crypto.ts";
 import { FAVICON_SVG, SITE_CSS, SITE_CSS_VERSION, errorList, escapeHtml, page } from "./html.ts";
+import { logEvent } from "./log.ts";
 import { SSE_RETRY_MS, SSE_HEARTBEAT_MS } from "./poker/live.ts";
 import { renderTablePage } from "./poker/page.ts";
 import {
@@ -493,6 +494,37 @@ function tableIdParam(c: Context): number | undefined {
   return Number.isInteger(id) ? id : undefined;
 }
 
+// Multi-user testing with Fly logs: every poker POST is logged when it
+// arrives ("action_received") and, if the server turns it down, again with
+// the status and the reason it gave ("action_rejected"). One place, so no
+// route can forget. The body was already parsed by the route, and Hono
+// caches it, so reading it here costs nothing extra.
+app.use("/tables/:id/:route{sit|leave|start|act}", async (c, next) => {
+  if (c.req.method !== "POST") return next();
+  const user = currentUser(c);
+  const body = await c.req.parseBody();
+  const fields = {
+    table: c.req.param("id"),
+    route: c.req.param("route"),
+    user: user?.id,
+    name: user?.display_name,
+    type: typeof body.type === "string" ? body.type : undefined,
+    amount: typeof body.amount === "string" && body.amount !== "" ? body.amount : undefined,
+  };
+  logEvent("action_received", fields);
+  await next();
+  if (c.res.status >= 400) {
+    let reason: string | undefined;
+    try {
+      const data = (await c.res.clone().json()) as { error?: string; code?: string };
+      reason = data.code ?? data.error;
+    } catch {
+      reason = undefined;
+    }
+    logEvent("action_rejected", { ...fields, status: c.res.status, reason });
+  }
+});
+
 // Server-rendered first paint (docs/c9-brief.md Step 3); the page's own
 // inline script takes over from here via EventSource.
 app.get("/tables/:id", (c) => {
@@ -516,6 +548,7 @@ app.get("/tables/:id/view", (c) => {
   if (!user) return c.json({ error: "Log in first." }, 401);
   const view = tableId !== undefined ? buildView(tableId, user.id) : undefined;
   if (!view) return c.notFound();
+  logEvent("snapshot", { table: tableId, user: user.id, name: user.display_name, seq: view.seq, via: "view" });
   return c.json(view);
 });
 
@@ -581,12 +614,22 @@ app.get("/tables/:id/events", (c) => {
 
       await stream.write(`retry: ${SSE_RETRY_MS}\n\n`);
       await sendView(); // the caller's full current view, right on connect
+      logEvent("snapshot", {
+        table: tableId,
+        user: user.id,
+        name: user.display_name,
+        seq: currentSeq(tableId),
+        via: "stream_connect",
+      });
 
       let nextPingAt = Date.now() + SSE_HEARTBEAT_MS;
       while (!stream.aborted && !stream.closed) {
         if (dirty) {
           dirty = false;
-          if (!sessionStillValid()) break;
+          if (!sessionStillValid()) {
+            logEvent("stream_closed", { table: tableId, user: user.id, reason: "session_ended" });
+            break;
+          }
           await sendView();
           continue; // re-check immediately — another change may have landed while sendView() was writing
         }
@@ -604,7 +647,10 @@ app.get("/tables/:id/events", (c) => {
         if (stream.aborted || stream.closed) break;
         if (Date.now() < nextPingAt) continue; // woken by a push: send the view first
 
-        if (!sessionStillValid()) break;
+        if (!sessionStillValid()) {
+          logEvent("stream_closed", { table: tableId, user: user.id, reason: "session_ended" });
+          break;
+        }
         // The table's current seq, so a page that somehow missed a view can
         // tell (ping seq above what it last painted) and fetch it.
         await stream.writeSSE({ event: "ping", data: JSON.stringify({ seq: currentSeq(tableId) }) });

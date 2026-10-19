@@ -6,6 +6,7 @@ import { randomUUID } from "node:crypto";
 
 import { findUserById } from "../accounts.ts";
 import { db } from "../db.ts";
+import { logEvent } from "../log.ts";
 import type { Action, PublicState } from "./engine.ts";
 import { PokerEngine } from "./engine.ts";
 import {
@@ -134,6 +135,13 @@ export function subscribeToTable(tableId: number, userId: number, listener: Tabl
   }
   listeners.add(listener);
   streamOpened(tableId, userId);
+  logEvent("join", {
+    table: tableId,
+    user: userId,
+    name: displayNameFor(userId),
+    clients_in_table: listeners.size,
+    users_connected: usersConnected(tableId),
+  });
   let subscribed = true;
   return () => {
     if (!subscribed) return;
@@ -141,6 +149,13 @@ export function subscribeToTable(tableId: number, userId: number, listener: Tabl
     listeners.delete(listener);
     if (listeners.size === 0) tableListeners.delete(tableId);
     streamClosed(tableId, userId);
+    logEvent("disconnect", {
+      table: tableId,
+      user: userId,
+      name: displayNameFor(userId),
+      clients_in_table: listeners.size,
+      users_connected: usersConnected(tableId),
+    });
   };
 }
 
@@ -196,6 +211,37 @@ function awaySince(tableId: number, userId: number): number | undefined {
   return Math.max(lastSeenAt + AWAY_GRACE_MS, BOOTED_AT + BOOT_GRACE_MS);
 }
 
+// For the logs: how many distinct users have at least one open stream.
+function usersConnected(tableId: number): number {
+  let n = 0;
+  for (const presence of presenceByTable.get(tableId)?.values() ?? []) if (presence.openStreams > 0) n++;
+  return n;
+}
+
+// For the logs only: which seated users have already been logged as away, so
+// "away" is logged once when it happens and "back" once when it ends.
+const loggedAway = new Map<number, Set<number>>();
+
+function logAwayChanges(tableId: number, now = Date.now()): void {
+  let logged = loggedAway.get(tableId);
+  if (!logged) {
+    logged = new Set();
+    loggedAway.set(tableId, logged);
+  }
+  const seated = new Set(getSeats(tableId).map((s) => s.user_id));
+  for (const userId of seated) {
+    const away = isAway(tableId, userId, now);
+    if (away && !logged.has(userId)) {
+      logged.add(userId);
+      logEvent("away", { table: tableId, user: userId, name: displayNameFor(userId) });
+    } else if (!away && logged.has(userId)) {
+      logged.delete(userId);
+      logEvent("back", { table: tableId, user: userId, name: displayNameFor(userId) });
+    }
+  }
+  for (const userId of logged) if (!seated.has(userId)) logged.delete(userId);
+}
+
 function isAway(tableId: number, userId: number, now = Date.now()): boolean {
   const since = awaySince(tableId, userId);
   return since !== undefined && since <= now;
@@ -225,7 +271,10 @@ export function markPresent(tableId: number, userId: number): void {
 // A seat coming back changes what its `away` flag shows, so the table hears
 // about it; becoming away is handled by schedulePresenceCheck's timer.
 function presenceChanged(tableId: number, wasAway: boolean): void {
-  if (wasAway) notifyTable(tableId);
+  if (wasAway) {
+    logAwayChanges(tableId);
+    notifyTable(tableId);
+  }
   schedulePresenceCheck(tableId);
 }
 
@@ -248,8 +297,16 @@ function standUpAway(tableId: number, userIds: number[]): void {
   const gone: TableNotice["players"] = [];
   for (const userId of userIds) {
     try {
+      const timeouts = timeoutsInARow.get(tableId)?.get(userId) ?? 0;
       leave(tableId, userId);
       gone.push({ userId, displayName: displayNameFor(userId) });
+      logEvent("stood_up", {
+        table: tableId,
+        user: userId,
+        name: displayNameFor(userId),
+        reason: timeouts >= AWAY_STAND_TIMEOUTS ? "timeouts" : "away",
+        timeouts_in_a_row: timeouts,
+      });
     } catch (err) {
       // Already gone, or a hand is somehow still running: try the next seat.
       console.error(`poker: couldn't stand up away user ${userId} at table ${tableId}`, err);
@@ -301,6 +358,7 @@ function runPresenceCheck(tableId: number): void {
   try {
     const now = Date.now();
     // Anyone who became away since the last check: their seat's flag changed.
+    logAwayChanges(tableId, now);
     notifyTable(tableId);
     pullInDeadlineIfAway(tableId, now);
     if (!handInProgress(tableId)) standUpAway(tableId, seatsToStandUp(tableId, now));
@@ -340,6 +398,7 @@ function notifyTable(tableId: number): void {
   // route's own response) reads a seq at least this high.
   seqByTable.set(tableId, currentSeq(tableId) + 1);
   const listeners = tableListeners.get(tableId);
+  logEvent("broadcast", { table: tableId, seq: currentSeq(tableId), recipients: listeners?.size ?? 0 });
   if (!listeners) return;
   // One listener throwing shouldn't stop the rest of a table's connections
   // from hearing about the change.
@@ -474,6 +533,7 @@ export function sitDown(tableId: number, userId: number): void {
     userId,
     table.buy_in,
   );
+  logEvent("sit", { table: tableId, user: userId, name: displayNameFor(userId), seat: seatNo, stack: table.buy_in });
   notifyTable(tableId);
   schedulePresenceCheck(tableId); // a new seat with no stream turns away on its own
 }
@@ -502,6 +562,7 @@ export function leave(tableId: number, userId: number): void {
     }
   }
   db.prepare("DELETE FROM seats WHERE table_id = ? AND user_id = ?").run(tableId, userId);
+  logEvent("leave_seat", { table: tableId, user: userId, name: displayNameFor(userId), seat: seat.seat_no });
   timeoutsInARow.get(tableId)?.delete(userId); // sitting down again starts from 0
   notifyTable(tableId);
   schedulePresenceCheck(tableId);
@@ -610,6 +671,12 @@ export function startHand(tableId: number): void {
   db.transaction(() => {
     writeFreshTableState(tableId, engine, existing?.version ?? 0);
   })();
+  logEvent("hand_start", {
+    table: tableId,
+    hand: engine.state.handNumber,
+    players: seats.length,
+    to_act: engine.state.actionTo,
+  });
   lastActionByTable.delete(tableId); // a fresh hand has no "last action" yet
   noticeByTable.delete(tableId);
   scheduleTimeoutFor(tableId);
@@ -760,8 +827,21 @@ export function commitPreparedAction(prepared: PreparedAction): void {
 
   if (!applied) {
     // Lost a race with another action or the turn timer; nothing was applied.
+    logEvent("action_lost_race", { table: tableId, user: actingUserId, type: actionType, auto });
     throw new StaleActionError(STALE_ACTION_MESSAGE);
   }
+
+  logEvent("action_applied", {
+    table: tableId,
+    user: actingUserId,
+    name: displayNameFor(actingUserId),
+    seat: actingSeat,
+    type: actionType,
+    auto,
+    street: newState.street,
+    next_to_act: newState.actionTo,
+    hand_over: handEnded,
+  });
 
   // actingSeat/actionType, not actionHistory's last entry: when a fold ends
   // a hand, the engine appends a further bookkeeping entry
@@ -887,6 +967,7 @@ function runTimeout(tableId: number): void {
 // inside scheduleTimeoutFor), and every other table's future deadline is
 // rescheduled.
 export function restoreSchedulersOnBoot(): void {
+  logEvent("boot", { boot_id: BOOT_ID });
   const rows = db.prepare("SELECT table_id FROM table_state").all() as { table_id: number }[];
   for (const row of rows) scheduleTimeoutFor(row.table_id);
   // Final brief Step 4: seated players nobody has connected as since the
