@@ -1,6 +1,5 @@
 import { db } from "./db.ts";
 
-export const RECOVERY_QUESTION_COUNT = 2;
 const MAX_RECOVERY_ATTEMPTS = 5;
 const RECOVERY_LOCK_MS = 60 * 60 * 1000; // 1 hour
 

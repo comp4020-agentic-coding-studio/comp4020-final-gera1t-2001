@@ -138,7 +138,9 @@ function questionOptions(selected: string, other: string, placeholder: string): 
     SECURITY_QUESTIONS.map(
       (q) =>
         `<option value="${escapeHtml(q.key)}"${q.key === selected ? " selected" : ""}${
-          q.key === other ? " disabled" : ""
+          // Hidden from the other select, but never the option this select
+          // itself holds: a disabled option isn't submitted.
+          q.key === other && q.key !== selected ? " disabled" : ""
         }>${escapeHtml(q.text)}</option>`,
     ).join("")
   );
@@ -309,7 +311,7 @@ const clientScript = `<script>
   const exclude = () => {
     selects.forEach((s) => {
       const other = selects.find((o) => o !== s);
-      [...s.options].forEach((o) => { o.disabled = o.value === "" || (!!other && o.value === other.value); });
+      [...s.options].forEach((o) => { o.disabled = o.value === "" || (!!other && o.value === other.value && o.value !== s.value); });
     });
   };
   selects.forEach((s) => s.addEventListener("change", exclude));

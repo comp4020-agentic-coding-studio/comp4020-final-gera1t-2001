@@ -362,16 +362,29 @@ describe.skipIf(!isLocal)("accounts (writes test data — local only)", () => {
     expect(profile.querySelector<HTMLTextAreaElement>("#bio")?.value).toBe(bio);
   });
 
-  it("the register form excludes a chosen question from the other select", async () => {
-    // Server render of a failed submit with question 1 chosen: that option is
-    // disabled in select 2. (The live exclusion as you pick is checked in a
-    // real browser; this is the no-JS half.)
-    const { res } = await register({ questionKeys: ["first_dish", "first_dish"] });
-    const doc = new JSDOM(await res.text()).window.document;
-    const disabledIn2 = [...doc.querySelectorAll<HTMLOptionElement>("#question_2 option")]
-      .filter((o) => o.disabled)
-      .map((o) => o.value);
-    expect(disabledIn2).toContain("first_dish");
-    expect(fieldErrors(doc, "question_2").messages).toEqual([MESSAGES.questionsSame]);
+  it("a re-rendered register form hides each question from the other select but never disables its own choice", async () => {
+    // Server-rendered half of the exclusion (the live half is checked in a
+    // browser). A disabled option is not submitted, so a select whose chosen
+    // option is disabled would post no question at all.
+    const disabledValues = (doc: Document, id: string) =>
+      [...doc.querySelectorAll<HTMLOptionElement>(`#${id} option`)].filter((o) => o.disabled).map((o) => o.value);
+    const selectedDisabled = (doc: Document, id: string) => doc.querySelector<HTMLSelectElement>(`#${id}`)!.selectedOptions[0]?.disabled;
+
+    // Two different questions, failing for another reason (weak password).
+    const different = await register({ password: "weak", questionKeys: ["first_dish", "childhood_nickname"] });
+    const d1 = new JSDOM(await different.res.text()).window.document;
+    expect(disabledValues(d1, "question_2")).toContain("first_dish");
+    expect(disabledValues(d1, "question_1")).toContain("childhood_nickname");
+    expect(selectedDisabled(d1, "question_1")).toBe(false);
+    expect(selectedDisabled(d1, "question_2")).toBe(false);
+
+    // The same question twice: both selects keep their choice submittable.
+    const same = await register({ questionKeys: ["first_dish", "first_dish"] });
+    const d2 = new JSDOM(await same.res.text()).window.document;
+    expect(fieldErrors(d2, "question_2").messages).toEqual([MESSAGES.questionsSame]);
+    expect(selectedDisabled(d2, "question_1")).toBe(false);
+    expect(selectedDisabled(d2, "question_2")).toBe(false);
+    const submitted = [...new d2.defaultView!.FormData(d2.querySelector("form")!).keys()];
+    expect(submitted).toEqual(expect.arrayContaining(["question_1", "question_2"]));
   });
 });
