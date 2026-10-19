@@ -1708,3 +1708,38 @@ own choice".
 
 **Curated prompt:** "Run the Opus subagent review the brief requires for
 Step 6... Commit any fixes with log entries. Don't push."
+
+## 2026-10-19 16:10 — [harness]
+
+**What happened:** The week-11 class exercise ("Multi-user testing with Fly
+logs") asks for logs that show a user connecting, disconnecting, an action
+arriving, a broadcast, a rejection and a snapshot sent to one user. The app
+logged almost nothing (only errors and "listening on"), so `flyctl logs` could
+not show any of it. The owner was in class on a laptop, away from the WSL
+repo, so this commit was made from the Claude chat session and pushed from
+the laptop.
+
+**What I did instead of the obvious thing:** Rather than scatter
+`console.log` calls through the routes, one `logEvent()` helper
+(`src/log.ts`) writes a single key=value line per event, and every line
+carries `machine=` (Fly's `FLY_MACHINE_ID`), because the scale-out scenario
+is only readable if each line says which machine it came from. Received and
+rejected actions are logged in one Hono middleware around the four poker
+POST routes, so no route can forget to log, and the rejection line carries
+the same reason the player sees (or `identity_changed` for the 409).
+
+**How I knew it was right:**
+- `pnpm typecheck` clean; `pnpm test` against a local app: 4 files, 39/39.
+- That run's server log held 610 event lines covering every event type: join,
+  disconnect, action_received, action_rejected (an out-of-turn 400, the
+  identity 409, a leave by someone not seated), action_applied, broadcast,
+  snapshot (via stream and via GET /view), sit, leave_seat, hand_start, away,
+  back, stood_up (reason=timeouts, 5 in a row), stream_closed and boot.
+- Not checked: production output (needs the deploy), and no browser look,
+  since nothing visible changed.
+
+**Citation:** `b08de89` (`src/log.ts`, `src/poker/table.ts`, `src/server.ts`).
+
+**Curated prompt:** "Class requirement: multi-user testing with Fly logs.
+Make sure the system logs user connects/leaves, action received, broadcast,
+rejection and a snapshot sent to one user; deploy it."
