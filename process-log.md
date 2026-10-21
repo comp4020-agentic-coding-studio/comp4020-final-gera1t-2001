@@ -1910,3 +1910,43 @@ a lifted red (6.04:1, computed) and keep the minus sign.
 
 **Curated prompt:** "Part 3: brief Step 8 (home and results). Put the
 Results nav link back."
+
+## 2026-10-22 02:45 — [judgement]
+
+**What happened:** Step 9's walk (minus the push): a brand-new visitor at
+both viewports, clicking home → register → table → sit, deal, play a hand
+out against a second browser → results → about → profile → log out, then
+the latency probe against local.
+
+**What I did instead of the obvious thing:** The run says to push once
+after this part if every gate is green. The local gates are (`pnpm check`
+47/47, `check:evidence` green, no open review finding that I can fix
+without the owner), but the push was **held**: the run also requires,
+before and after the deploy, the multi-user test against production and
+the production probe, both with the PROBE accounts, and production rejects
+PROBE_A's login (HTTP 400 on three tries, 00:50 to 02:20). Deploying
+Steps 7–8 with no way to check them afterwards with the owner's accounts
+fits the stop rule "a check stays red after two honest attempts". The Opus
+review of the walk found nothing broken and three cheap fixes (a stale
+finished hand on an emptied table, "Pot 0" reading as "Pot O" in Young
+Serif, a bubble left after showdown), which were made. Three findings are
+the owner's: duplicate display names in Regulars and the ledger, phone
+seat names truncated as in the mockup, and the hero/Regulars alignment and
+copy.
+
+**How I knew it was right:**
+- Walk at 1920×1080 and 390×844, by clicking: every step reached the
+  expected URL with the title "<Page> · House Game", `scrollWidth -
+  innerWidth` 0, no console errors; registering lands on `/tables/1`; nav
+  after logout reads Table/Results/About/Log in/Register.
+- Test 19 (an emptied table shows no stale board, bubble or pot) went red
+  with the fix disabled, green with it.
+- Probe against local (two local throwaway accounts, 30 actions): delivery
+  median 4 ms, p95 7 ms, max 11 ms, 0/30 missed; idle stream max gap
+  5005 ms against a 5 s heartbeat; both seats left at the end.
+- Not verified: production (no push), a real phone, screen readers.
+
+**Citation:** `1cac630` (`src/poker/render.js`, `spec/poker.test.ts`).
+
+**Curated prompt:** "Part 4: brief Step 9, except the push. Do the full walk
+at both viewports. Run the latency probe against local only for now."
