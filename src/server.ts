@@ -33,7 +33,7 @@ import { hashSecret, spendDummyVerify, verifySecret } from "./crypto.ts";
 import { FAVICON_SVG, SITE_CSS, SITE_CSS_VERSION, errorList, escapeHtml, page } from "./html.ts";
 import { logEvent } from "./log.ts";
 import { SSE_RETRY_MS, SSE_HEARTBEAT_MS } from "./poker/live.ts";
-import { renderTablePage } from "./poker/page.ts";
+import { TABLE_RENDER_JS, TABLE_RENDER_VERSION, renderTablePage } from "./poker/page.ts";
 import {
   PokerError,
   applyAction,
@@ -113,6 +113,17 @@ app.get("/assets/site.css", (c) => {
   const cacheControl =
     c.req.query("v") === SITE_CSS_VERSION ? "public, max-age=31536000, immutable" : "no-cache";
   return c.body(SITE_CSS, 200, { "content-type": "text/css; charset=utf-8", "cache-control": cacheControl });
+});
+
+// The table's one renderer (src/poker/render.js), which the table page's
+// client imports. Same caching rule as the stylesheet.
+app.get("/assets/table-render.js", (c) => {
+  const cacheControl =
+    c.req.query("v") === TABLE_RENDER_VERSION ? "public, max-age=31536000, immutable" : "no-cache";
+  return c.body(TABLE_RENDER_JS, 200, {
+    "content-type": "text/javascript; charset=utf-8",
+    "cache-control": cacheControl,
+  });
 });
 
 app.get("/favicon.svg", (c) =>

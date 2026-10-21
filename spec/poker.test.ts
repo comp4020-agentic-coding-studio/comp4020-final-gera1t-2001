@@ -1,4 +1,5 @@
 import { randomBytes } from "node:crypto";
+import { JSDOM } from "jsdom";
 import { afterEach, beforeAll, beforeEach, describe, expect, inject, it } from "vitest";
 
 import {
@@ -94,6 +95,8 @@ interface HandView {
   winners: unknown[] | null;
   players: (HandPlayer | null)[];
   pots: { amount: number }[];
+  currentBets: Record<string, number>; // final brief Step 7: bets in front, by seat
+  minRaise: number;
 }
 
 interface LastAction {
@@ -970,4 +973,124 @@ describe.skipIf(!isLocal)("ghost seats (writes test data — local only)", () =>
       expect(msUntil(bobTurn.turnDeadline)).toBeGreaterThan(TURN_TIMEOUT_SECONDS * 1000 - 1000);
     },
   );
+});
+
+// Final brief Step 7: the table page, rebuilt from the mockup. These read the
+// page the way a player would, from the parsed DOM of GET /tables/1, and check
+// what it means against the JSON view the same server returns. They live in
+// this file, not their own, because vitest runs test files in parallel and
+// every test that plays a hand shares table 1.
+describe.skipIf(!isLocal)("table page (writes test data — local only)", () => {
+  let players: Player[] = [];
+
+  afterEach(async () => {
+    await cleanupTable(players);
+    players = [];
+  });
+
+  async function tablePage(cookie: string): Promise<Document> {
+    const res = await fetch(new URL(`/tables/${TABLE_ID}`, baseUrl), { headers: { cookie } });
+    return new JSDOM(await res.text()).window.document;
+  }
+
+  const potOf = (view: TableView): number =>
+    view.hand!.pots.reduce((sum, p) => sum + p.amount, 0) +
+    Object.values(view.hand!.currentBets).reduce((sum, n) => sum + n, 0);
+
+  it("12. the pot shown preflop counts the blinds in front of players", async () => {
+    players = [await registerAndSit(), await registerAndSit()];
+    const view = await startHand(players[0].cookie);
+    const doc = await tablePage(players[0].cookie);
+    const shown = Number(doc.querySelector("[data-pot]")!.getAttribute("data-pot"));
+    expect(potOf(view)).toBeGreaterThan(0); // the blinds are posted, none settled yet
+    expect(shown).toBe(potOf(view));
+  });
+
+  it("13. Call N is what you owe, and the amount the dock offers is a raise-to the engine accepts as-is", async () => {
+    players = [await registerAndSit(), await registerAndSit()];
+    const started = await startHand(players[0].cookie);
+    const actor = players.find((p) => p.seatNo === started.hand!.actionTo)!;
+    const doc = await tablePage(actor.cookie);
+
+    // What you owe, from the view: the highest bet in front minus yours.
+    const me = started.hand!.players[actor.seatNo]!;
+    const owed = Math.max(...Object.values(started.hand!.currentBets)) - me.betThisStreet;
+    const call = doc.querySelector<HTMLButtonElement>('#action-form button[value="call"]')!;
+    expect(Number(call.dataset.amount)).toBe(owed);
+    // Fold and Check/Call submit without the browser checking the amount box's
+    // min/max, so a half-typed raise can't block them.
+    for (const value of ["fold", "call"]) {
+      expect(doc.querySelector<HTMLButtonElement>(`#action-form button[value="${value}"]`)!.formNoValidate).toBe(true);
+    }
+
+    // The engine reads RAISE amounts as raise-to totals
+    // (@pokertools/engine actions/validation.js: "RAISE amounts are raise-to
+    // totals"), and its minRaise is one. The page posts the box's number
+    // unchanged, so sending that number must leave this player's bet at
+    // exactly it, not at it plus what they owed.
+    const offered = Number(doc.querySelector<HTMLInputElement>("#action-form input[name=amount]")!.value);
+    expect(offered).toBe(started.hand!.minRaise);
+    const after = await act(actor.cookie, "raise", offered);
+    expect(after.hand!.players[actor.seatNo]!.betThisStreet).toBe(offered);
+  });
+
+  it("14. the first paint is the served renderer's output for the same view", async () => {
+    // One renderer for both (src/poker/render.js): the server's first paint
+    // and what the served module renders from the embedded view must match,
+    // so the file the browser imports can't drift from the one the server
+    // runs. It runs that module in Node, so it can't see a branch inside it
+    // on `window`; render.js stays pure (no environment reads) for that.
+    players = [await registerAndSit(), await registerAndSit()];
+    await startHand(players[0].cookie);
+    const doc = await tablePage(players[0].cookie);
+    const view = JSON.parse(doc.getElementById("table-view")!.textContent!);
+    const src = doc.querySelector('script[type="module"]')!.textContent!;
+    const rendererPath = /from "([^"]+)"/.exec(src)![1];
+    const rendererJs = await (await fetch(new URL(rendererPath, baseUrl))).text();
+    const { renderTable } = await import(`data:text/javascript,${encodeURIComponent(rendererJs)}`);
+
+    // Compare as parsed DOM, with the clock (the only time-dependent part)
+    // taken out: the ring's share and the seconds left move between the
+    // server's render and this one.
+    const normalise = (root: Element): string => {
+      root.querySelectorAll("[style]").forEach((el) => el.removeAttribute("style"));
+      root.querySelectorAll("[data-clock]").forEach((el) => (el.textContent = ""));
+      return root.innerHTML;
+    };
+    const fresh = new JSDOM(`<div id="r">${renderTable(view, Date.now())}</div>`).window.document.getElementById("r")!;
+    expect(normalise(fresh)).toBe(normalise(doc.getElementById("table-root")!));
+  });
+
+  it("15. you sit in the bottom slot, and data-seat stays your real seat", async () => {
+    players = [await registerAndSit(), await registerAndSit(), await registerAndSit()];
+    for (const p of players) {
+      const doc = await tablePage(p.cookie);
+      const mine = doc.querySelector(".seat.you")!;
+      expect(mine.classList.contains("s0")).toBe(true);
+      expect(Number(mine.getAttribute("data-seat"))).toBe(p.seatNo);
+      // Every real seat appears once, each in a different slot.
+      const slots = [...doc.querySelectorAll(".seat")].map((el) => [...el.classList].find((c) => /^s\d$/.test(c)));
+      expect(new Set(slots).size).toBe(slots.length);
+    }
+  });
+
+  it("16. Sit, Leave and Deal are offered only when legal", async () => {
+    const shownForms = (doc: Document): string[] =>
+      ["sit-form", "leave-form", "start-form"].filter((id) => !doc.getElementById(id)!.hasAttribute("hidden"));
+
+    const alice = await registerAndSit();
+    players = [alice];
+    expect(shownForms(await tablePage(alice.cookie))).toEqual(["leave-form"]); // alone: can't deal
+
+    const bob = await registerAndSit();
+    players = [alice, bob];
+    expect(shownForms(await tablePage(alice.cookie))).toEqual(["leave-form", "start-form"]);
+
+    await startHand(alice.cookie);
+    expect(shownForms(await tablePage(alice.cookie))).toEqual([]); // mid-hand: no leave, no deal
+
+    // A watcher (signed in, not seated) can sit while a seat is open.
+    const watcher = await register(randomUsername());
+    expect(shownForms(await tablePage(watcher))).toContain("sit-form");
+  });
 });

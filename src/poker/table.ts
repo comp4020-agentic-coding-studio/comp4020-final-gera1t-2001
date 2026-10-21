@@ -59,6 +59,9 @@ export interface LastAction {
   seat: number;
   type: string; // the engine's own ActionType string: "FOLD", "CHECK", ...
   auto: boolean; // true if the turn timer took this action, not a real click
+  // Chips this action put in: the call's size, or the bet/raise-to total
+  // (final brief Step 7's "call 20", "raise to 80"). null for fold/check.
+  amount: number | null;
   at: string;
 }
 
@@ -78,6 +81,10 @@ export interface TableView {
   // null until the table's first hand is ever dealt.
   hand: PublicState | null;
   turnDeadline: string | null;
+  // Final brief Step 7: how long the current turn is (30 s, or 5 s for an
+  // away player), so the turn ring's share is time left / this, never a
+  // hard-coded 30. null when nobody is to act.
+  turnSeconds: number | null;
   // table_state.version (0 before the first hand) — what a client or test
   // compares to tell whether anything was written, not only whether the
   // public state happens to look the same.
@@ -471,6 +478,7 @@ export function buildView(tableId: number, viewerUserId: number | undefined): Ta
     seats,
     hand,
     turnDeadline: stateRow?.turn_deadline ?? null,
+    turnSeconds: stateRow ? turnSeconds(stateRow) : null,
     version: stateRow?.version ?? 0,
     seq,
     bootId: BOOT_ID,
@@ -479,6 +487,17 @@ export function buildView(tableId: number, viewerUserId: number | undefined): Ta
     you: viewerUserId ?? null,
     youDisplayName: viewerUserId !== undefined ? (findUserById(viewerUserId)?.display_name ?? null) : null,
   };
+}
+
+// Every write that starts a turn sets turn_deadline and updated_at together,
+// so the turn's length is their difference. Pulling an away player's deadline
+// in (pullInDeadlineIfAway) moves only turn_deadline, which makes this turn
+// shorter from when it started: the ring keeps going down, it doesn't refill.
+// Read from the row rather than kept in memory, so it survives a restart.
+function turnSeconds(row: TableStateRow): number | null {
+  if (!row.turn_deadline) return null;
+  const ms = new Date(row.turn_deadline).getTime() - new Date(row.updated_at).getTime();
+  return Math.max(1, Math.round(ms / 1000));
 }
 
 export interface HandResult {
@@ -719,6 +738,7 @@ interface PreparedAction {
   actingSeat: number; // who this action was for — see note at the call site below
   actingUserId: number;
   actionType: string; // the engine's own ActionType string, e.g. "FOLD"
+  amount: number | null; // see LastAction.amount
 }
 
 // Read + validate only — no write. Split out from applyAction so the version
@@ -766,7 +786,18 @@ export function prepareAction(
   // it's exactly "the stack this hand started from" for the net calculation.
   const stacksBeforeHand = new Map(getSeats(tableId).map((s) => [String(s.user_id), s.stack]));
 
+  const before = engine.state.players[actingSeat];
   engine.act(action);
+  const after = engine.state.players[actingSeat];
+
+  // What the bubble says (LastAction.amount). A call's size is what it added
+  // this hand: betThisStreet can already be 0 if the call closed the street.
+  // A bet or raise never closes a street, so betThisStreet is its "to" total.
+  let chipsIn: number | null = null;
+  if (before && after) {
+    if (action.type === "CALL") chipsIn = after.totalInvestedThisHand - before.totalInvestedThisHand;
+    else if (action.type === "BET" || action.type === "RAISE") chipsIn = after.betThisStreet;
+  }
 
   return {
     tableId,
@@ -778,6 +809,7 @@ export function prepareAction(
     actingSeat,
     actingUserId: Number(playerId),
     actionType: action.type,
+    amount: chipsIn !== null && chipsIn > 0 ? chipsIn : null,
   };
 }
 
@@ -792,8 +824,18 @@ export function prepareAction(
 // snapshot, the stack updates and the hand_results rows for a hand ending
 // all land together, or none of them do.
 export function commitPreparedAction(prepared: PreparedAction): void {
-  const { tableId, engine, previousVersion, stacksBeforeHand, handEnded, auto, actingSeat, actingUserId, actionType } =
-    prepared;
+  const {
+    tableId,
+    engine,
+    previousVersion,
+    stacksBeforeHand,
+    handEnded,
+    auto,
+    actingSeat,
+    actingUserId,
+    actionType,
+    amount,
+  } = prepared;
   const newState = engine.state;
 
   const applied = db.transaction((): boolean => {
@@ -852,6 +894,7 @@ export function commitPreparedAction(prepared: PreparedAction): void {
     seat: actingSeat,
     type: actionType,
     auto,
+    amount,
     at: new Date().toISOString(),
   });
 

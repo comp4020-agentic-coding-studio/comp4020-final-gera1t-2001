@@ -13,7 +13,11 @@
     "noEmit": true,
     "skipLibCheck": true,
     "moduleDetection": "force",
-    "verbatimModuleSyntax": true
+    "verbatimModuleSyntax": true,
+    // src/poker/render.js runs in the browser as well as on the server, so
+    // it is plain JavaScript; this type-checks it from its JSDoc.
+    "allowJs": true,
+    "checkJs": true
   },
   "include": ["*.ts", "spec", "scripts", "src"]
 }
