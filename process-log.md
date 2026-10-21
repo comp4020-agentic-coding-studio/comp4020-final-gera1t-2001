@@ -1867,3 +1867,46 @@ dropped the bet marker's transform on the top and bottom slots; measured
 
 **Curated prompt:** "Part 2: brief Step 7 (the table, from
 docs/design/table-mockup.html)."
+
+## 2026-10-22 02:20 — [judgement]
+
+**What happened:** Step 8 adds the home hero and `/results`. The ledger is
+simple; the "last 20 hands" list is not, because `hand_results` has one row
+per player per hand and no hand id.
+
+**What I did instead of the obvious thing:** Rather than group rows by exact
+`ended_at` (which works on fresh data) or add a migration with a hand id,
+the hand's end is now stamped once in JS and passed to every row of that
+hand, and older rows are clustered by time. The Opus review found the old
+rows split: SQLite's `'now'` is fixed per statement and the commit runs one
+INSERT per player, so the dev database's 394 rows grouped into 205 "hands",
+24 of them one-player. A first 50 ms window then merged four scripted hands
+into one 8-player group on a 6-seat table, which disproved my own comment
+that two hands can't end that close. Measured the gaps instead: rows of one
+hand were 0–3 ms apart; the closest separate hands, 29 ms. Window set to
+10 ms. The `--red` token is 2.67:1 on the room colour, so negative nets use
+a lifted red (6.04:1, computed) and keep the minus sign.
+
+**How I knew it was right:**
+- On a copy of `data/dev.sqlite3`: 193 hands of 2–3 players, every hand's
+  nets summing to 0 (chip conservation, so each group is one real hand),
+  versus 24 unbalanced groups by exact `ended_at`. The live dev file was
+  never written; the scratch server ran on copies.
+- Test 17 (ledger net = sum of that player's `hand_results` rows, both as
+  `data-net` and as the visible signed text parsed back; sorted best first)
+  went red for SUM→MAX, for the sort flipped, and for a dropped minus sign.
+  Test 18: `/results` signed out redirects to `/login`.
+- Headless Chromium, 1920×1080 and 390×844: home signed out, seated
+  ("Back to the table") and signed in but not seated ("Take a seat"); results
+  on fresh and legacy data. `scrollWidth - innerWidth` 0 on all; Results nav
+  link present with `aria-current` on its page.
+- `pnpm check`: 46/46.
+- Not verified: the hero does not update live (it is the state at page
+  load); Google Fonts was intermittently unreachable, so some shots show the
+  fallback fonts.
+
+**Citation:** `283d111` (`src/results.ts`, `src/server.ts`, `src/html.ts`,
+`src/assets/site.css`, `src/poker/table.ts`, `spec/poker.test.ts`).
+
+**Curated prompt:** "Part 3: brief Step 8 (home and results). Put the
+Results nav link back."

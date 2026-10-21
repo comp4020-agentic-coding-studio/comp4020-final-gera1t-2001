@@ -1135,4 +1135,22 @@ describe.skipIf(!isLocal)("table page (writes test data — local only)", () => 
     expect(res.status).toBe(303);
     expect(new URL(res.headers.get("location")!, baseUrl).pathname).toBe("/login");
   });
+
+  it("19. once everyone stands up, a newcomer sees an empty table, not the last showdown", async () => {
+    const alice = await registerAndSit();
+    const bob = await registerAndSit();
+    players = [alice, bob];
+    const view = await startHand(alice.cookie);
+    await act(players.find((p) => p.seatNo === view.hand!.actionTo)!.cookie, "fold");
+    // While seated, the finished hand stays on the felt: its last action shows.
+    expect(await getView(alice.cookie).then((v) => v.hand!.winners)).not.toBeNull();
+    await leaveTable(alice.cookie);
+    await leaveTable(bob.cookie);
+
+    const newcomer = await register(randomUsername());
+    const doc = await tablePage(newcomer);
+    expect(doc.querySelectorAll(".board .card:not(.slot)").length).toBe(0);
+    expect(doc.querySelector(".said")).toBeNull();
+    expect(doc.querySelector("[data-pot]")).toBeNull();
+  });
 });

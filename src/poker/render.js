@@ -186,7 +186,7 @@ function seatsHtml(view, now) {
     }
 
     const said =
-      view.lastAction && view.lastAction.seat === seatNo && hand
+      view.lastAction && view.lastAction.seat === seatNo && running
         ? `<div class="said${view.lastAction.auto ? " auto" : ""}">${escapeHtml(actionLabel(view.lastAction))}</div>`
         : "";
     const ring = isTurn && clock ? ` style="--p:${clock.share.toFixed(3)}"` : "";
@@ -211,9 +211,10 @@ function seatsHtml(view, now) {
 
 /** @param {TableView} view */
 function centreHtml(view) {
-  const hand = view.hand;
+  const hand = shownHand(view);
   if (!hand) {
-    return `<div class="center"><div class="street">No hand yet</div><div class="board">${SLOT_CARD.repeat(5)}</div><div class="pot">Pot <strong data-pot="0">0</strong></div></div>`;
+    // No pot line before a hand: "Pot 0" in Young Serif reads as "Pot O".
+    return `<div class="center"><div class="street">No hand yet</div><div class="board">${SLOT_CARD.repeat(5)}</div></div>`;
   }
   // Pot = settled pots plus what is in front of players this street, so the
   // blinds count before the first street closes.
@@ -239,6 +240,16 @@ function streetLabel(hand) {
   return STREETS[hand.street] ?? hand.street;
 }
 
+// The hand to show. A finished hand stays on the felt so players see how it
+// ended, but once everyone has stood up it belongs to nobody at the table,
+// so a newcomer sees an empty table rather than strangers' last showdown.
+/** @param {TableView} view */
+function shownHand(view) {
+  const hand = view.hand;
+  if (hand && hand.winners !== null && view.seats.length === 0) return null;
+  return hand;
+}
+
 // "lynx won 140." / "lynx and aaa split 140."
 /** @param {TableView} view */
 function winnersText(view) {
@@ -261,7 +272,7 @@ function promptHtml(view, now) {
   const { hand, running, myTurn } = viewerState(view);
   const clock = turnClock(view, now);
   const clockHtml = clock ? `<span class="clock" data-clock>${clock.seconds}s</span>` : "";
-  if (!hand) return view.seats.length < 2 ? "Waiting for players. Two seated can deal." : "No hand yet. Deal when ready.";
+  if (!hand || !shownHand(view)) return view.seats.length < 2 ? "Waiting for players. Two seated can deal." : "No hand yet. Deal when ready.";
   if (!running) return winnersText(view);
   if (myTurn) {
     const last = view.lastAction;
