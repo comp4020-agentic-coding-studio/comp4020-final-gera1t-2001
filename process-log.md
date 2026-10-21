@@ -1768,3 +1768,102 @@ filled in yet.
 
 **Curated prompt:** "Class requirement: docs/testing/multi-user-test-report.md,
 document expected behaviour and observations from the test."
+
+## 2026-10-22 00:40 — [routine]
+
+**What happened:** The owner left `docs/run-all-prompt.md`, one run covering
+the multi-user test report, brief Steps 7–9 and the deploy, and asked for it
+to be committed on its own first.
+
+**What I did instead of the obvious thing:** Nothing beyond the ask; the file
+was committed unedited.
+
+**How I knew it was right:** `git show --stat f7857d3` lists only that file.
+
+**Citation:** `f7857d3` (`docs/run-all-prompt.md`).
+
+**Curated prompt:** "Read docs/run-all-prompt.md and follow it. Commit that
+file first, on its own, with a log entry."
+
+## 2026-10-22 00:50 — [judgement] (no commit)
+
+**What happened:** Part 1 (run the multi-user scenarios against production
+with the two PROBE accounts) could not start: production's `/login` rejects
+PROBE_A's credentials (HTTP 400, the "don't match" page) while PROBE_B logs
+in (303). Both env vars are set; the values were never printed.
+
+**What I did instead of the obvious thing:** Rather than stop the whole run
+or guess at the credentials, I notified the owner and moved on to Steps 7–9,
+which are local. Part 1 and the push stay blocked on working credentials.
+The run's order puts Part 1 first, but it describes the deployed build, so
+doing it after Step 9 is not a loss as long as it happens before the push.
+
+**How I knew it was right:** Two separate login attempts for A, one for B, each
+by HTTP status code only.
+
+**Citation:** (no commit); the run's stop rule on blocked checks.
+
+## 2026-10-22 01:50 — [judgement]
+
+**What happened:** Step 7 ports the table mockup onto the live view. The
+brief says first paint and live renders must produce the same markup, and
+asks which way that was done.
+
+**What I did instead of the obvious thing:** Rather than keep the old two
+renderers (TypeScript for the server, a hand-copied JS string for the
+browser) and grow both, one renderer, `src/poker/render.js`, is imported by
+the server and served verbatim to the browser's module client. An Opus
+second opinion weighed this against server-rendered HTML fragments (an
+extra round trip per push, in a brief about lag) and a parity test over two
+renderers (detects drift after the fact). `checkJs` type-checks the file;
+it is pure, taking `now` as an argument. Typechecking it found one real
+divergence before any test: `currentBets` is a Map on the server and a
+plain object after JSON, so the first paint's pot would have missed the
+blinds. Other judgement calls, each checked against engine source rather
+than memory: raise amounts are raise-to totals (`validation.js:120`, "RAISE
+amounts are raise-to totals"), so the client sends the box's number as is;
+the price to call mirrors `rules/current-bet.js` (never under the big blind
+preflop); the raise box hides when `validateRaiseRights` would refuse.
+`bare 0` in the mockup's `--bx: 0` makes `calc(-50% + 0)` invalid, which
+dropped the bet marker's transform on the top and bottom slots; measured
+(computed transform `none`), fixed with `0rem`.
+
+**How I knew it was right:**
+- Two Playwright contexts (separate cookie jars) at 1920×1080 and 390×844:
+  sat, dealt, a hand to a fold and one to showdown by clicking. Every action
+  appeared on the other page in 23–58 ms (median 43–44 ms, 14 actions per
+  run), no console errors, `scrollWidth - innerWidth` 0, showdown faces
+  shown only for the hand not mucked.
+- Tab order at both viewports: wordmark, nav, Fold, Check/Call, amount,
+  Raise, Min, ½ pot, Pot, All in, each with the brass ring
+  (`rgb(226,178,79)`). A first sensor reported a non-brass ring; it was
+  reading the element after the dock, so it was rewritten to read each
+  control in turn before believing it.
+- Same-browser scenario (Step 2): banner shown, every control disabled, at
+  both viewports.
+- Bet markers measured against name plates at both viewports: no overlap.
+- Tests 12–16 (pot counts blinds; Call N = what you owe and raise-to accepted
+  as is; first paint = served renderer's output; you are slot 0 with the real
+  `data-seat`; Sit/Leave/Deal legality). Each was turned red by breaking its
+  behaviour on purpose, and only its own test went red. Test 14 cannot see a
+  `window` branch inside render.js (it runs the module in Node): proved on a
+  served-file drift instead, and the limit is written in the test.
+- First full run with the new tests in their own file went 13 red: vitest
+  runs files in parallel and every test plays on table 1. Moved them into
+  `spec/poker.test.ts`, which owns that table. `pnpm check`: 44/44.
+- Opus review of diff and screenshots found 3 real defects (Fold/Call blocked
+  by the raise box's min/max validation; your bet marker on your own hole
+  cards at 1920; 390 screenshots older than the code), 3 smaller ones (Call N
+  vs the engine's preflop price, a dead Raise after an incomplete raise, no
+  screen-reader turn announcement) and tests 12–13 asserting label text. All
+  fixed; re-review confirmed each. Typed 15 below the minimum, then Call, in
+  a real browser: it sent.
+- Not verified: a real phone; screen-reader output (only the live region's
+  text was read back); the font file itself (Google Fonts was unreachable
+  from curl here, though the browser rendered Young Serif).
+
+**Citation:** `e9f6574` (`src/poker/render.js`, `src/poker/page.ts`,
+`src/poker/table.ts`, `src/server.ts`, `tsconfig.json`, `spec/poker.test.ts`).
+
+**Curated prompt:** "Part 2: brief Step 7 (the table, from
+docs/design/table-mockup.html)."

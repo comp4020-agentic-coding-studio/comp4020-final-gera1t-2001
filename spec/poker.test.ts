@@ -1093,4 +1093,46 @@ describe.skipIf(!isLocal)("table page (writes test data — local only)", () => 
     const watcher = await register(randomUsername());
     expect(shownForms(await tablePage(watcher))).toContain("sit-form");
   });
+
+  it("17. Results lists each player's net as the sum of their hand_results rows", async () => {
+    const alice = await registerAndSit();
+    const bob = await registerAndSit();
+    players = [alice, bob];
+    // Two hands that end in a fold, so both players have rows that differ.
+    for (let hand = 0; hand < 2; hand++) {
+      const view = await startHand(alice.cookie);
+      const actor = players.find((p) => p.seatNo === view.hand!.actionTo)!;
+      await act(actor.cookie, "fold");
+    }
+
+    const rows = (await (
+      await fetch(new URL(`/tables/${TABLE_ID}/results`, baseUrl), { headers: { cookie: alice.cookie } })
+    ).json()) as { userId: number; net: number }[];
+    const res = await fetch(new URL("/results", baseUrl), { headers: { cookie: alice.cookie } });
+    expect(res.status).toBe(200);
+    const doc = new JSDOM(await res.text()).window.document;
+
+    for (const p of [alice, bob]) {
+      const mine = rows.filter((r) => r.userId === p.userId);
+      expect(mine.length).toBe(2);
+      const row = doc.querySelector(`#ledger tr[data-user-id="${p.userId}"]`)!;
+      const net = mine.reduce((sum, r) => sum + r.net, 0);
+      const cell = row.querySelector("[data-net]")!;
+      expect(Number(cell.getAttribute("data-net"))).toBe(net);
+      // And the number people read: the signed text parsed back, minus sign
+      // (U+2212) and thousands separators included.
+      expect(Number(cell.textContent!.replace("\u2212", "-").replace(/[,+]/g, ""))).toBe(net);
+      expect(Number(row.querySelector("[data-hands]")!.getAttribute("data-hands"))).toBe(mine.length);
+    }
+    // Sorted by net, best first.
+    const nets = [...doc.querySelectorAll("#ledger [data-net]")].map((el) => Number(el.getAttribute("data-net")));
+    expect(nets).toEqual([...nets].sort((a, b) => b - a));
+  });
+
+  it("18. Results is signed-in only", async () => {
+    players = [await registerAndSit()];
+    const res = await fetch(new URL("/results", baseUrl), { redirect: "manual" });
+    expect(res.status).toBe(303);
+    expect(new URL(res.headers.get("location")!, baseUrl).pathname).toBe("/login");
+  });
 });

@@ -29,9 +29,11 @@ import {
   updateProfile,
 } from "./accounts.ts";
 import type { User } from "./accounts.ts";
+import type { TableView } from "./poker/table.ts";
 import { hashSecret, spendDummyVerify, verifySecret } from "./crypto.ts";
 import { FAVICON_SVG, SITE_CSS, SITE_CSS_VERSION, errorList, escapeHtml, page } from "./html.ts";
 import { logEvent } from "./log.ts";
+import { resultsPage } from "./results.ts";
 import { SSE_RETRY_MS, SSE_HEARTBEAT_MS } from "./poker/live.ts";
 import { TABLE_RENDER_JS, TABLE_RENDER_VERSION, renderTablePage } from "./poker/page.ts";
 import {
@@ -130,25 +132,69 @@ app.get("/favicon.svg", (c) =>
   c.body(FAVICON_SVG, 200, { "content-type": "image/svg+xml", "cache-control": "no-cache" }),
 );
 
+// Final brief Step 8: the hero is the live table in miniature, read from the
+// same view the table page uses (as a spectator, or as you when signed in, so
+// "Back to the table" can tell you're seated). Below it, the regulars.
 app.get("/", (c) => {
+  const user = currentUser(c);
+  const view = buildView(HOME_TABLE_ID, user?.id);
   const members = listMembers();
   const items = members
     .map(
       (m) =>
-        `<li><strong>${escapeHtml(m.display_name)}</strong>${m.bio ? ` — ${escapeHtml(m.bio)}` : ""}</li>`,
+        `<li><strong>${escapeHtml(m.display_name)}</strong>${m.bio ? `<span class="bio">${escapeHtml(m.bio)}</span>` : ""}</li>`,
     )
     .join("");
   return c.html(
     page(
       null,
-      `<main class="column">
-        <h1>Members</h1>
-        <p>A Texas Hold'em table for friends. <a href="/tables/1">Join the table</a>.</p>
-        ${members.length > 0 ? `<ul>${items}</ul>` : "<p>No one has registered yet.</p>"}
+      `<main class="home">
+        ${view ? homeHero(view, user) : ""}
+        <section class="column regulars">
+          <h2>Regulars</h2>
+          ${members.length > 0 ? `<ul>${items}</ul>` : "<p>No one has registered yet.</p>"}
+        </section>
       </main>`,
-      { user: currentUser(c) },
+      { user },
     ),
   );
+});
+
+const HOME_TABLE_ID = 1;
+
+function homeHero(view: TableView, user: User | undefined): string {
+  const seated = view.seats.length;
+  const free = view.table.max_seats - seated;
+  const running = view.hand !== null && view.hand.winners === null;
+  const status = running
+    ? `${seated} seated, hand in progress`
+    : free > 0
+      ? `Table's open, ${free} ${free === 1 ? "seat" : "seats"} free`
+      : `${seated} seated, table full`;
+  const youSeated = user !== undefined && view.seats.some((s) => s.userId === user.id);
+  const seatByNo = new Map(view.seats.map((s) => [s.seatNo, s]));
+  const dots = Array.from({ length: view.table.max_seats }, (_, seatNo) => {
+    const seat = seatByNo.get(seatNo);
+    const turn = running && view.hand!.actionTo === seatNo;
+    return seat
+      ? `<li class="mini-seat m${seatNo}${turn ? " turn" : ""}${seat.userId === user?.id ? " you" : ""}" title="${escapeHtml(seat.displayName)}">${escapeHtml(Array.from(seat.displayName.trim())[0]?.toUpperCase() ?? "?")}</li>`
+      : `<li class="mini-seat m${seatNo} open"></li>`;
+  }).join("");
+  return `<section class="hero" aria-labelledby="hero-title">
+      <div class="mini-table" aria-hidden="true"><ul>${dots}</ul></div>
+      <div class="hero-text">
+        <h1 id="hero-title">${escapeHtml(view.table.name)}</h1>
+        <p class="hero-status" data-status>${escapeHtml(status)}</p>
+        <a class="primary hero-cta" href="/tables/${view.table.id}">${youSeated ? "Back to the table" : "Take a seat"}</a>
+      </div>
+    </section>`;
+}
+
+// Final brief Step 8: the ledger. Signed-in only, like the table.
+app.get("/results", (c) => {
+  const user = currentUser(c);
+  if (!user) return c.redirect(`/login?next=${encodeURIComponent("/results")}`, 303);
+  return c.html(page("Results", resultsPage(HOME_TABLE_ID, user.id), { user, current: "results" }));
 });
 
 app.get("/readme", (c) => c.redirect("/readme/", 301));

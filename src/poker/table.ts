@@ -847,6 +847,11 @@ export function commitPreparedAction(prepared: PreparedAction): void {
       // note: a hand ending is one atomic change to the database, not
       // three separate ones that could land only partially if the process
       // died in between — and now also gated on the same version check.
+      // One timestamp for the whole hand, so its rows share an ended_at and
+      // /results can group them back into a hand (hand_results has no hand
+      // id). SQLite's 'now' is only fixed within one statement, and this is
+      // one INSERT per player.
+      const endedAt = new Date().toISOString();
       for (const player of newState.players) {
         if (!player) continue;
         const userId = Number(player.id);
@@ -857,10 +862,11 @@ export function commitPreparedAction(prepared: PreparedAction): void {
           tableId,
           userId,
         );
-        db.prepare("INSERT INTO hand_results (table_id, user_id, net) VALUES (?, ?, ?)").run(
+        db.prepare("INSERT INTO hand_results (table_id, user_id, net, ended_at) VALUES (?, ?, ?, ?)").run(
           tableId,
           userId,
           net,
+          endedAt,
         );
       }
     }

@@ -171,6 +171,58 @@ select { text-overflow: ellipsis; }
 }
 .summary:focus { outline: 3px solid var(--brass-ink); outline-offset: 2px; }
 
+/* ---- Shared helpers ---- */
+.visually-hidden { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+
+/* ---- Home: the live table in miniature (final brief Step 8) ---- */
+.home { padding: 0; }
+.hero {
+  max-width: 60rem; margin: 0 auto; padding: 3rem clamp(1rem, 3vw, 2rem) 2rem;
+  display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 2.5rem; align-items: center;
+}
+.mini-table {
+  position: relative; aspect-ratio: 2.05 / 1; border-radius: 999px; margin: 1.5rem;
+  background: radial-gradient(ellipse 55% 60% at 50% 46%, var(--felt-lit), var(--felt) 70%);
+  box-shadow: 0 0 0 9px var(--rail), 0 0 0 10px var(--rail-hi), 0 20px 50px rgba(0,0,0,.45);
+}
+.mini-table ul { list-style: none; margin: 0; padding: 0; }
+.mini-seat {
+  position: absolute; left: var(--x); top: var(--y); transform: translate(-50%, -50%);
+  width: 2.4rem; height: 2.4rem; border-radius: 50%; display: grid; place-items: center;
+  font: 1rem/1 var(--serif); color: var(--text); background: var(--room-2); border: 2px solid var(--line);
+}
+.mini-seat.open { border-style: dashed; background: transparent; }
+.mini-seat.turn { border-color: var(--brass); }
+.mini-seat.you { color: var(--brass); }
+.m0 { --x: 50%; --y: 100%; } .m1 { --x: 9%; --y: 82%; } .m2 { --x: 9%; --y: 18%; }
+.m3 { --x: 50%; --y: 0%; } .m4 { --x: 91%; --y: 18%; } .m5 { --x: 91%; --y: 82%; }
+.hero h1 { font-size: 2.4rem; margin: 0 0 .4rem; }
+.hero-status { margin: 0 0 1.5rem; font-size: 1.15rem; color: var(--muted); }
+.hero-cta {
+  display: inline-grid; place-items: center; width: auto; padding: 0 1.75rem; text-decoration: none;
+}
+.regulars { padding-top: 1rem; }
+.regulars ul { list-style: none; padding: 0; margin: 0; display: grid; gap: .75rem; }
+.regulars li { border-top: 1px solid var(--line); padding-top: .75rem; }
+.regulars .bio { display: block; color: var(--muted); }
+
+/* ---- Results: the ledger (final brief Step 8) ---- */
+.lede-room { color: var(--muted); margin-top: -.5rem; }
+.ledger { width: 100%; border-collapse: collapse; margin-bottom: 2rem; }
+.column .ledger { display: table; }
+.ledger th, .ledger td { text-align: left; padding: .5rem .6rem; border: 0; border-bottom: 1px solid var(--line); vertical-align: top; }
+.ledger thead th { color: var(--muted); font-weight: 600; font-size: .9rem; }
+.ledger .num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.ledger .neg { color: #f0857e; } /* --red lifted for contrast on the room */
+.ledger tr.you th { color: var(--brass); }
+#recent tbody.hand + tbody.hand tr:first-child > * { border-top: 2px solid var(--line); }
+
+@media (max-width: 640px) {
+  .hero { grid-template-columns: 1fr; gap: 1rem; padding-top: 1.5rem; text-align: center; }
+  .mini-table { margin: 1.25rem 1.5rem; }
+  .hero-cta { width: 100%; }
+}
+
 @media (max-width: 640px) {
   .site-nav { margin-left: 0; width: 100%; gap: .4rem .9rem; font-size: .9rem; }
   .auth { padding-top: 2.5rem; }
