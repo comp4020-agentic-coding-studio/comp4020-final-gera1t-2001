@@ -21,7 +21,7 @@ Desktop.ini
 .env
 .env.*
 .envrc
-mise.local.toml
+mise.local.toml*
 *.pem
 
 # Claude Code's project directory is machine-local: settings in here can hold
