@@ -2011,3 +2011,52 @@ the wipe will deploy on its own.
 **Curated prompt:** "docs/wipe-and-push.md is mine, I just updated it. Read
 it and follow it. Commit that file first, on its own, with a log entry.
 Leave docs/final-brief-2.md uncommitted."
+
+## 2026-11-04 01:52 — [judgement]
+
+**What happened:** Parts 1–2 of `docs/wipe-and-push.md`. I backed up the
+production database and downloaded it, then added `0005_wipe_accounts.sql`,
+which deletes every account and everything that belongs to accounts on the
+next boot. Not pushed: Part 3 stops for the owner.
+
+**What I did instead of the obvious thing:**
+- On the machine, `/data/app.sqlite3` is 4 KB and nearly all the data sits in
+  the 1.5 MB `-wal` file. Copying the main file over sftp would have given a
+  near-empty "backup". The run's online `backup()` reads through a connection,
+  so it includes the WAL. Before relying on its promise, I checked
+  better-sqlite3 13.0.3's source (the same version on the machine):
+  `lib/methods/backup.js:8` is an `async function`, and lines 40–47 resolve
+  only when `remainingPages` is 0. It printed
+  `{"totalPages":25,"remainingPages":0}`.
+- To confirm the downloaded file really is the data, I counted the same
+  tables in the live database (read-only). I didn't just trust that the
+  file opens.
+- The local test copy of `data/dev.sqlite3` was also made with `backup()`
+  from a read-only handle, so the real dev file was never opened for
+  writing (its sha1 was taken after the test).
+- The migration lists the six tables explicitly, child tables first,
+  instead of relying on `ON DELETE CASCADE`, as the run asks. The backup's
+  `sqlite_master` was checked first: there are no other tables, views or
+  triggers, and no `AUTOINCREMENT`, so no `sqlite_sequence` either.
+
+**How I knew it was right:**
+- Backup: kept at `~/house-game-backups/backup-2026-11-04.sqlite3` (mode
+  600, outside the repo). `integrity_check` ok. Counts: users 6, sessions 7,
+  security_questions 12, seats 2, table_state 1, hand_results 14. They are
+  identical to the live database. The copy on the machine was deleted only
+  after that.
+- Local, on the copy (461 users, 598 sessions, 922 security_questions,
+  1 seat, 1 table_state, 394 hand_results before boot): after booting, all
+  six tables are at 0, `poker_tables` is 1, and `schema_migrations` lists
+  `0004_clear_table_1.sql` and `0005_wipe_accounts.sql`. Two new accounts
+  then registered, sat, dealt and folded a hand out (all 200), and both left.
+- `pnpm check` 47/47 against a fresh scratch app (which applies 0005);
+  `pnpm check:evidence` green.
+- Not verified: the migration on production (needs the push); the
+  "missing table_state is version 0" claim was checked by reading
+  `src/poker/table.ts:691` and by the hand dealt above, not by a new test.
+
+**Citation:** `e1986c6` (`migrations/0005_wipe_accounts.sql`).
+
+**Curated prompt:** "docs/wipe-and-push.md is mine, I just updated it. Read
+it and follow it."
