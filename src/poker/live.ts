@@ -20,8 +20,8 @@ export const SSE_RETRY_MS = 2_000;
 
 // Owner decision (docs/c9-brief.md): when it's your turn and you do nothing,
 // the server acts for you after this long: check if checking is legal,
-// otherwise fold.
-export const TURN_TIMEOUT_SECONDS = Number(process.env.TURN_TIMEOUT_SECONDS ?? 30);
+// otherwise fold. 30 s until docs/final-brief-2.md (4 Nov) made it 20.
+export const TURN_TIMEOUT_SECONDS = Number(process.env.TURN_TIMEOUT_SECONDS ?? 20);
 
 // Owner decision (docs/final-brief-2.md, 4 Nov): a finished hand stays on the
 // felt this long, then the next hand deals itself if at least two seated

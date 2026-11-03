@@ -21,7 +21,7 @@ export const TABLE_RENDER_VERSION = createHash("sha256").update(TABLE_RENDER_JS)
 // A module script, so it can import the renderer. Module scripts run after
 // the document is parsed, which is all this needs.
 const tableClientScript = String.raw`
-import { renderTable, turnClock } from "/assets/table-render.js?v=${TABLE_RENDER_VERSION}";
+import { nextHandLabel, renderTable, turnClock } from "/assets/table-render.js?v=${TABLE_RENDER_VERSION}";
 
 var tableId = document.body.dataset.tableId;
 var viewerId = Number(document.body.dataset.viewerId);
@@ -125,9 +125,14 @@ function controlKey(el) {
 
 // The turn ring and the seconds left are recomputed from the server's
 // turn_deadline every tick (never from when the page loaded), using the
-// renderer's own turnClock, so a tick and a fresh render always agree.
+// renderer's own turnClock, so a tick and a fresh render always agree. The
+// "Next hand in 4 s" countdown (brief 2 Step 10) is ticked the same way, from
+// the server's nextHandAt, through the renderer's own nextHandLabel.
 function updateClock() {
-  var clock = turnClock(currentView, Date.now());
+  var now = Date.now();
+  var next = nextHandLabel(currentView, now);
+  if (next) root.querySelectorAll("[data-next-hand]").forEach(function (el) { el.textContent = next; });
+  var clock = turnClock(currentView, now);
   if (!clock) return;
   var avatar = root.querySelector("[data-turn] .avatar");
   if (avatar) avatar.style.setProperty("--p", clock.share.toFixed(3));
@@ -380,7 +385,11 @@ setInterval(function () {
 // stream may have been asleep or dead the whole time, so catch up now
 // rather than wait out the watchdog.
 document.addEventListener("visibilitychange", function () {
-  if (document.visibilityState === "visible" && !identityLost) fetchView();
+  if (document.visibilityState !== "visible" || identityLost) return;
+  fetchView();
+  // Brief 2 Step 10: as "online" does. A phone back from the background
+  // usually has a dead stream; without this it waited for the watchdog.
+  if (!streamLive) openStream();
 });
 window.addEventListener("online", function () {
   if (identityLost) return;
@@ -520,6 +529,10 @@ const TABLE_STYLE = `
   .prompt strong { font-family: var(--serif); font-weight: 400; font-size: 1.25rem; }
   .prompt .clock { color: var(--brass); font-weight: 700; margin-left: .35rem; }
   .prompt .clock-plain { font-weight: 700; }
+  /* Its own line on a phone. The space before it stays in the text, for
+     screen readers and copy; a block's leading whitespace isn't drawn. */
+  .prompt .next-hand { color: var(--muted); white-space: nowrap; margin-left: .2rem; }
+  @media (max-width: 640px) { .prompt .next-hand { display: block; margin-left: 0; } }
   .actions, .table-controls { display: flex; flex-wrap: wrap; gap: .6rem; align-items: center; grid-column: 2; }
   .table-controls form { display: contents; }
   .btn {

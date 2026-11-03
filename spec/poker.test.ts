@@ -230,6 +230,8 @@ async function cleanupTable(players: Player[]): Promise<void> {
     }
     if (allGone) return;
   }
+  // Leftover seats would turn later tests red far from here; fail here.
+  throw new Error("cleanupTable: couldn't empty the table after 5 rounds");
 }
 
 interface SseEvent {
@@ -540,7 +542,7 @@ describe.skipIf(!isLocal)("poker (writes test data — local only)", () => {
 
       // Deliberately a SHORT-lived SSE connection: open it only ~3s before
       // the deadline, not right after the call. An earlier version held the
-      // connection open for the entire wait (up to the full 30s default)
+      // connection open for the entire wait (up to the full default timeout)
       // and was observed, investigated at length, to have its underlying
       // stream end on its own well before the deadline for reasons traced
       // to this sandbox's handling of a long-lived connection on a process
@@ -1077,12 +1079,12 @@ describe.skipIf(!isLocal)("table page (writes test data — local only)", () => 
     const rendererJs = await (await fetch(new URL(rendererPath, baseUrl))).text();
     const { renderTable } = await import(`data:text/javascript,${encodeURIComponent(rendererJs)}`);
 
-    // Compare as parsed DOM, with the clock (the only time-dependent part)
-    // taken out: the ring's share and the seconds left move between the
-    // server's render and this one.
+    // Compare as parsed DOM, with the clocks (the only time-dependent parts)
+    // taken out: the ring's share, the seconds left and the next hand's
+    // countdown move between the server's render and this one.
     const normalise = (root: Element): string => {
       root.querySelectorAll("[style]").forEach((el) => el.removeAttribute("style"));
-      root.querySelectorAll("[data-clock]").forEach((el) => (el.textContent = ""));
+      root.querySelectorAll("[data-clock], [data-next-hand]").forEach((el) => (el.textContent = ""));
       return root.innerHTML;
     };
     const fresh = new JSDOM(`<div id="r">${renderTable(view, Date.now())}</div>`).window.document.getElementById("r")!;
@@ -1333,7 +1335,7 @@ describe.skipIf(!isLocal)("showdown for everyone, and no dead time (writes test 
       const res = await fetch(new URL(`/tables/${TABLE_ID}`, baseUrl), { headers: { cookie: p.cookie } });
       const doc = new JSDOM(await res.text()).window.document;
       const ranks = [...doc.querySelectorAll("[data-prompt] [data-hand-rank]")].map((el) => el.getAttribute("data-hand-rank"));
-      expect(ranks).toEqual([showdown.hand!.winners![0].handRank]);
+      expect(new Set(ranks)).toEqual(new Set(showdown.hand!.winners!.map((w) => w.handRank)));
     }
 
     const foldOut = await playOut(await startHand(players[0].cookie), () => "fold");
@@ -1401,34 +1403,48 @@ describe.skipIf(!isLocal)("showdown for everyone, and no dead time (writes test 
       await sleep(SHOWDOWN_PAUSE_MS + 1500);
       const after = await getView(alice.cookie);
       expect(after.hand!.handId).toBe(view.hand!.handId);
+      // "Otherwise Deal next hand as today": the auto-deal stands nobody up,
+      // so bob, away but within the owner's 5 timeouts / 5 minutes, keeps his
+      // seat. (A manual deal would stand him up first, as Step 4 set.)
+      expect(after.seats.find((s) => s.userId === bob.userId)).toBeDefined();
     },
   );
 
   it(
-    "26. a manual deal during the pause starts exactly one hand, and the pause after it is a full one",
-    { timeout: 3 * SHOWDOWN_PAUSE_MS + 15_000 },
+    "26. a manual deal during the pause starts exactly one hand, and the countdown restarts from its end",
+    { timeout: 4 * SHOWDOWN_PAUSE_MS + 20_000 },
     async () => {
       players = [await registerAndSit(), await registerAndSit()];
       for (const p of players) holdStream(p);
-      await playOut(await startHand(players[0].cookie), () => "fold");
-      const firstEnd = Date.now();
 
-      // Deal by hand halfway into the pause, then fold that hand out at once,
-      // so it ends well before the first pause would have.
+      // Part A: a manual hand that ends quickly. The timer armed for the
+      // first hand would deal at firstPauseEnds; the second hand's own pause
+      // runs a full SHOWDOWN_PAUSE_MS after that, so 300 ms past the first
+      // pause's end the second hand must still be on the felt, finished.
+      const first = await playOut(await startHand(players[0].cookie), () => "fold");
+      const firstPauseEnds = new Date(first.nextHandAt!).getTime();
       await sleep(SHOWDOWN_PAUSE_MS / 2);
-      const manual = await startHand(players[0].cookie);
-      const second = await playOut(manual, () => "fold");
+      const second = await playOut(await startHand(players[0].cookie), () => "fold");
       const secondEnd = Date.now();
-      // The countdown restarted from the second hand's end.
-      expect(new Date(second.nextHandAt!).getTime()).toBeGreaterThan(firstEnd + SHOWDOWN_PAUSE_MS);
+      expect(Math.abs(new Date(second.nextHandAt!).getTime() - secondEnd - SHOWDOWN_PAUSE_MS)).toBeLessThan(1000);
+      await sleep(firstPauseEnds + 300 - Date.now());
+      const afterFirstPause = await getView(players[0].cookie);
+      expect(afterFirstPause.hand!.handId).toBe(second.hand!.handId);
+      expect(afterFirstPause.hand!.winners).not.toBeNull();
 
-      // Halfway between when the first pause would have ended and when the
-      // second one does: a timer left over from the first hand would have
-      // dealt by now; the second's mustn't have yet.
-      await sleep((firstEnd + SHOWDOWN_PAUSE_MS + secondEnd + SHOWDOWN_PAUSE_MS) / 2 - Date.now());
-      const mid = await getView(players[0].cookie);
-      expect(mid.hand!.handId).toBe(second.hand!.handId);
-      expect(mid.hand!.winners).not.toBeNull();
+      // Part B: a manual hand still running when its predecessor's pause
+      // would have ended. Nothing is dealt on top of it, nothing is written,
+      // and no countdown shows while it runs.
+      const secondPauseEnds = new Date(second.nextHandAt!).getTime();
+      await sleep(SHOWDOWN_PAUSE_MS / 4);
+      const manual = await startHand(players[0].cookie);
+      expect(manual.nextHandAt).toBeNull();
+      await sleep(secondPauseEnds + 1000 - Date.now());
+      const during = await getView(players[0].cookie);
+      expect(during.hand!.handId).toBe(manual.hand!.handId);
+      expect(during.hand!.winners).toBeNull();
+      expect(during.version).toBe(manual.version);
+      expect(during.nextHandAt).toBeNull();
     },
   );
 

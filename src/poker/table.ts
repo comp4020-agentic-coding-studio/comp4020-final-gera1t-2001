@@ -15,6 +15,7 @@ import {
   AWAY_STAND_TIMEOUTS,
   AWAY_TURN_SECONDS,
   BOOT_GRACE_MS,
+  SHOWDOWN_PAUSE_MS,
   TURN_TIMEOUT_SECONDS,
 } from "./live.ts";
 import { STALE_ACTION_MESSAGE, UNKNOWN_MOVE_MESSAGE, playerMessageForEngineError } from "./messages.ts";
@@ -81,10 +82,15 @@ export interface TableView {
   // null until the table's first hand is ever dealt.
   hand: PublicState | null;
   turnDeadline: string | null;
-  // Final brief Step 7: how long the current turn is (30 s, or 5 s for an
-  // away player), so the turn ring's share is time left / this, never a
-  // hard-coded 30. null when nobody is to act.
+  // Final brief Step 7: how long the current turn is (TURN_TIMEOUT_SECONDS,
+  // or AWAY_TURN_SECONDS for an away player), so the turn ring's share is
+  // time left / this, never a hard-coded number. null when nobody is to act.
   turnSeconds: number | null;
+  // Brief 2 Step 10: when the finished hand on the felt gives way to the next
+  // one, dealt by the server (scheduleAutoDeal). null while a hand runs, or
+  // when no deal is coming (fewer than two present). The page counts down to
+  // it from the server's time, as it does for turnDeadline.
+  nextHandAt: string | null;
   // table_state.version (0 before the first hand) — what a client or test
   // compares to tell whether anything was written, not only whether the
   // public state happens to look the same.
@@ -479,6 +485,7 @@ export function buildView(tableId: number, viewerUserId: number | undefined): Ta
     hand,
     turnDeadline: stateRow?.turn_deadline ?? null,
     turnSeconds: stateRow ? turnSeconds(stateRow) : null,
+    nextHandAt: nextHandAt(tableId),
     version: stateRow?.version ?? 0,
     seq,
     bootId: BOOT_ID,
@@ -583,6 +590,10 @@ export function leave(tableId: number, userId: number): void {
   db.prepare("DELETE FROM seats WHERE table_id = ? AND user_id = ?").run(tableId, userId);
   logEvent("leave_seat", { table: tableId, user: userId, name: displayNameFor(userId), seat: seat.seat_no });
   timeoutsInARow.get(tableId)?.delete(userId); // sitting down again starts from 0
+  // Brief 2 Step 10: a leave (or a stand-up, which comes through here) that
+  // leaves fewer than two present cancels a pending auto-deal for good; a
+  // newcomer sitting down in the pause doesn't revive it.
+  if (presentSeatCount(tableId) < 2) cancelAutoDeal(tableId);
   notifyTable(tableId);
   schedulePresenceCheck(tableId);
 }
@@ -650,7 +661,8 @@ function displayNameFor(userId: number): string {
   return findUserById(userId)?.display_name ?? `user ${userId}`;
 }
 
-export function startHand(tableId: number): void {
+// `by`: who dealt, for the logs only. "auto" is runAutoDeal (brief 2 Step 10).
+export function startHand(tableId: number, by: "manual" | "auto" = "manual"): void {
   const table = requireTable(tableId);
   if (getSeats(tableId).length < 2) throw new PokerError("Need at least 2 players seated to start a hand.");
 
@@ -662,16 +674,22 @@ export function startHand(tableId: number): void {
     }
   }
 
-  // Final brief Step 4: deal in present players only. Anyone away is stood
-  // up first, the same way a hand's end stands them up. If that leaves fewer
-  // than two, those stand-ups still stand: they were away either way.
-  standUpAway(
-    tableId,
-    getSeats(tableId)
-      .filter((s) => isAway(tableId, s.user_id))
-      .map((s) => s.user_id),
-  );
-  const seats = getSeats(tableId);
+  // Final brief Step 4: deal in present players only. On a manual deal, anyone
+  // away is stood up first; if that leaves fewer than two, those stand-ups
+  // still stand: they were away either way. Brief 2 Step 10: an auto-deal
+  // stands nobody up. It would otherwise turn "stood up after 5 timeouts or
+  // 5 min away" (owner decision) into "stood up at the next deal", 6 s after
+  // any hand ends, for a phone that locked near its end. runAutoDeal only
+  // calls this with two present players; away ones sit the hand out.
+  if (by === "manual") {
+    standUpAway(
+      tableId,
+      getSeats(tableId)
+        .filter((s) => isAway(tableId, s.user_id))
+        .map((s) => s.user_id),
+    );
+  }
+  const seats = getSeats(tableId).filter((s) => by === "manual" || !isAway(tableId, s.user_id));
   if (seats.length < 2) throw new PokerError("Need at least 2 players seated to start a hand.");
 
   // A fresh engine each hand, seated from seats.stack — the authoritative
@@ -690,11 +708,13 @@ export function startHand(tableId: number): void {
   db.transaction(() => {
     writeFreshTableState(tableId, engine, existing?.version ?? 0);
   })();
+  cancelAutoDeal(tableId); // a new hand is on the felt; any pending deal is moot
   logEvent("hand_start", {
     table: tableId,
     hand: engine.state.handNumber,
     players: seats.length,
     to_act: engine.state.actionTo,
+    by,
   });
   lastActionByTable.delete(tableId); // a fresh hand has no "last action" yet
   noticeByTable.delete(tableId);
@@ -726,6 +746,35 @@ function buildAction(rawType: string, playerId: string, amount: number | undefin
     default:
       throw new PokerError(UNKNOWN_MOVE_MESSAGE);
   }
+}
+
+// Brief 2 Step 10, owner decision "showdown is for everyone": every hand that
+// reaches a showdown is tabled for every viewer alike. The engine's default
+// is the opposite: @pokertools/engine 1.0.20 dist/rules/showdown.js,
+// determineWinners(), "winners show and losing hands remain mucked by
+// default" (losers get shownCards null), and dist/utils/view-masking.js
+// getVisibleHand() hides any opponent's hand whose shownCards is null, even
+// at SHOWDOWN. So once a hand has ended at a showdown, each live hand (ACTIVE
+// or ALL_IN) is shown through the engine's own SHOW action
+// (dist/engine/game-reducer.js `case "SHOW"` → handleShow in
+// dist/actions/showdown-actions.js, which sets shownCards to every index and
+// refuses a FOLDED player or any street but SHOWDOWN), and masking still
+// happens only in engine.view(). Folded hands are never shown.
+//
+// A fold-out isn't a showdown: it leaves one live player, and the engine
+// still moves the street to SHOWDOWN (betting.js awardPotToLastPlayer), so
+// it's the live-player count, not the street, that tells them apart.
+//
+// Called from prepareAction only, before commitPreparedAction snapshots the
+// engine, so the row that's written already holds the tabled hands. The turn
+// timer acts through applyAction → prepareAction too (runTimeout), so a hand
+// the timer ends is tabled the same way.
+function tableShowdownHands(engine: PokerEngine): void {
+  const state = engine.state;
+  if (state.winners === null || state.street !== "SHOWDOWN") return;
+  const live = state.players.filter((p) => p !== null && (p.status === "ACTIVE" || p.status === "ALL_IN"));
+  if (live.length < 2) return;
+  for (const player of live) engine.act({ type: "SHOW", playerId: player!.id } as Action);
 }
 
 interface PreparedAction {
@@ -798,6 +847,8 @@ export function prepareAction(
     if (action.type === "CALL") chipsIn = after.totalInvestedThisHand - before.totalInvestedThisHand;
     else if (action.type === "BET" || action.type === "RAISE") chipsIn = after.betThisStreet;
   }
+
+  tableShowdownHands(engine);
 
   return {
     tableId,
@@ -913,14 +964,19 @@ export function commitPreparedAction(prepared: PreparedAction): void {
   }
   counts.set(actingUserId, auto ? (counts.get(actingUserId) ?? 0) + 1 : 0);
 
-  notifyTable(tableId);
-
   // A hand that just ended stands up its ghosts: AWAY_STAND_TIMEOUTS
   // timeouts in a row, or away more than AWAY_STAND_MS. Never mid-hand.
+  // Before the broadcast, with the auto-deal (brief 2 Step 10) armed after
+  // them, so the view every page gets for the finished hand already carries
+  // the right nextHandAt and the right seats. standUpAway broadcasts on its
+  // own when it stands anyone up; the second broadcast just repeats it.
   if (handEnded) {
     standUpAway(tableId, seatsToStandUp(tableId));
-    schedulePresenceCheck(tableId);
+    scheduleAutoDeal(tableId);
   }
+
+  notifyTable(tableId);
+  if (handEnded) schedulePresenceCheck(tableId);
 }
 
 // The one path every real action AND every auto (timeout) action goes
@@ -1010,6 +1066,93 @@ function runTimeout(tableId: number): void {
   }
 }
 
+// --- Auto-deal (brief 2 Step 10) -----------------------------------------
+//
+// Owner decision, 4 Nov: a finished hand stays on the felt SHOWDOWN_PAUSE_MS,
+// then the next hand deals itself if at least two seated players are present
+// (not away); otherwise it waits for Deal next hand, as before. A scheduler
+// like the turn timer and the presence check: in memory, one per table, armed
+// when a hand ends (commitPreparedAction, so a hand the turn timer ends too),
+// cancelled by any new deal (startHand) and by a leave or stand-up that
+// leaves fewer than two present, and re-armed on boot from table_state.
+//
+// When the pause ends is the hand-ending write's table_state.updated_at plus
+// SHOWDOWN_PAUSE_MS, read from the row rather than kept in memory. Nothing is
+// re-armed on boot: for BOOT_GRACE_MS after a boot nobody's presence is known
+// (every seat counts as present), so an auto-deal then could deal in seats
+// whose owners left before the restart. A deploy mid-pause leaves the table
+// waiting for Deal next hand.
+interface AutoDeal {
+  at: number; // ms since epoch
+  timer: NodeJS.Timeout;
+}
+const autoDeals = new Map<number, AutoDeal>();
+
+// Seated, not away, and with chips to post a blind. A seat that lost
+// everything stays seated at 0 until its owner leaves (the engine refuses to
+// seat a 0 stack: dist/actions/validation.js validateSitAction, "Stack must
+// be positive"), so it can't be dealt in and doesn't count toward the two.
+function presentSeatCount(tableId: number): number {
+  return getSeats(tableId).filter((s) => s.stack > 0 && !isAway(tableId, s.user_id)).length;
+}
+
+// What the view says: the pause's end while a deal is still coming, null
+// otherwise. Presence is read now, so a player going away mid-pause takes the
+// countdown off every page (their away flag's broadcast carries it).
+function nextHandAt(tableId: number): string | null {
+  const pending = autoDeals.get(tableId);
+  if (!pending || presentSeatCount(tableId) < 2) return null;
+  return new Date(pending.at).toISOString();
+}
+
+function cancelAutoDeal(tableId: number): void {
+  const pending = autoDeals.get(tableId);
+  if (!pending) return;
+  clearTimeout(pending.timer);
+  autoDeals.delete(tableId);
+}
+
+function scheduleAutoDeal(tableId: number): void {
+  cancelAutoDeal(tableId);
+  const row = getTableState(tableId);
+  if (!row) return;
+  const state = restoreEngine(row).state;
+  if (state.handNumber === 0 || state.winners === null) return; // nothing finished on the felt
+  const at = new Date(row.updated_at).getTime() + SHOWDOWN_PAUSE_MS;
+  const delay = at - Date.now();
+  if (delay <= 0) return;
+  const version = row.version;
+  autoDeals.set(tableId, { at, timer: setTimeout(() => runAutoDeal(tableId, version), delay) });
+}
+
+// Deals through startHand, the same function Deal next hand calls, so every
+// invariant, log line and broadcast is the same. `version` is the table_state
+// version of the finished hand this was armed for: if anything has written
+// since (a manual deal, which also cancels this timer), it's a no-op. All of
+// this runs synchronously on Node's one thread, so a manual deal and this
+// timer can't interleave; whichever runs second finds the version moved (this
+// timer) or a hand in progress (startHand's own check), and does nothing.
+function runAutoDeal(tableId: number, version: number): void {
+  autoDeals.delete(tableId);
+  const row = getTableState(tableId);
+  if (!row || row.version !== version) return;
+  const present = presentSeatCount(tableId);
+  if (present < 2) {
+    logEvent("auto_deal_skipped", { table: tableId, present });
+    notifyTable(tableId); // the countdown comes off the pages
+    return;
+  }
+  try {
+    startHand(tableId, "auto");
+  } catch (err) {
+    // Whatever went wrong, the pages are still counting down to a deal that
+    // isn't coming: the broadcast takes "Dealing…" off them.
+    if (err instanceof PokerError) logEvent("auto_deal_skipped", { table: tableId, reason: err.message });
+    else console.error(`poker: auto-deal failed for table ${tableId}`, err);
+    notifyTable(tableId);
+  }
+}
+
 // Called once at boot (src/server.ts), after migrations run. Covers both
 // halves of the brief's requirement: a table whose deadline already passed
 // while the process was down gets its auto action immediately (delay <= 0
@@ -1018,6 +1161,7 @@ function runTimeout(tableId: number): void {
 export function restoreSchedulersOnBoot(): void {
   logEvent("boot", { boot_id: BOOT_ID });
   const rows = db.prepare("SELECT table_id FROM table_state").all() as { table_id: number }[];
+  // Brief 2 Step 10: no auto-deal is re-armed here; see scheduleAutoDeal.
   for (const row of rows) scheduleTimeoutFor(row.table_id);
   // Final brief Step 4: seated players nobody has connected as since the
   // boot become away once BOOT_GRACE_MS is up; this arms the timer for that.

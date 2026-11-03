@@ -9,7 +9,8 @@
 // the JSDoc, via tsconfig's checkJs) with no imports, and it is pure: the
 // clock comes in as `now`, so the server and the browser agree on the turn
 // ring for the same view and the same moment. The client's ticking timer
-// only updates the ring and the seconds; it never re-renders.
+// only updates the ring, the seconds and the next hand's countdown; it never
+// re-renders.
 
 /** @import { TableView } from "./table.ts" */
 
@@ -250,18 +251,105 @@ function shownHand(view) {
   return hand;
 }
 
-// "lynx won 140." / "lynx and aaa split 140."
+// The engine's winners[].handRank is the evaluator's category name and
+// nothing more: dist/rules/showdown.js evaluatePot() sets description to
+// rankDescription(rank(cardCodes)), i.e. one of HAND_RANK_DESCRIPTIONS in
+// @pokertools/evaluator dist/models/hand-rank.js ("Straight Flush", "Four of
+// a Kind", "Full House", "Flush", "Straight", "Three of a Kind", "Two Pair",
+// "One Pair", "High Card"). A pot only one live player can win (a side pot
+// above an all-in) says "Uncontested" (showdown.js evaluatePot, one eligible
+// player), and a fold-out's winners say null (dist/actions/betting.js
+// awardPotToLastPlayer). This is how each category reads after "with";
+// anything else is lower-cased as is.
+/** @type {Record<string, string>} */
+const HAND_RANK_PHRASES = {
+  "Straight Flush": "a straight flush",
+  "Four of a Kind": "four of a kind",
+  "Full House": "a full house",
+  Flush: "a flush",
+  Straight: "a straight",
+  "Three of a Kind": "three of a kind",
+  "Two Pair": "two pair",
+  "One Pair": "a pair",
+  "High Card": "high card",
+};
+
+/** @param {string} handRank */
+export function handRankPhrase(handRank) {
+  return HAND_RANK_PHRASES[handRank] ?? handRank.toLowerCase();
+}
+
+/** @param {string | null | undefined} handRank */
+function isShowdownRank(handRank) {
+  return typeof handRank === "string" && handRank !== "Uncontested";
+}
+
+// "Hand over. lynx won 140 with two pair." / "lynx and aaa split 140 with a
+// flush." / "lynx won 30. Everyone else folded." With side pots, one clause
+// per winner: "lynx won 100; aaa won 60 with a pair."
 /** @param {TableView} view */
 function winnersText(view) {
   const hand = view.hand;
   if (!hand || !hand.winners || hand.winners.length === 0) return "Hand over.";
-  const names = hand.winners.map((w) => {
-    const seat = view.seats.find((s) => s.seatNo === w.seat);
-    return seat ? seat.displayName : hand.players[w.seat]?.name ?? `seat ${w.seat + 1}`;
-  });
-  const total = hand.winners.reduce((sum, w) => sum + w.amount, 0);
-  const who = names.length === 1 ? names[0] : `${names.slice(0, -1).join(", ")} and ${names[names.length - 1]}`;
-  return `Hand over. ${escapeHtml(who)} ${names.length === 1 ? "won" : "split"} ${chips(total)}.`;
+  /** @param {number} seatNo */
+  const nameOf = (seatNo) => {
+    const seat = view.seats.find((s) => s.seatNo === seatNo);
+    return escapeHtml(seat ? seat.displayName : hand.players[seatNo]?.name ?? `seat ${seatNo + 1}`);
+  };
+  /** @param {string} handRank */
+  const withRank = (handRank) =>
+    ` with <span data-hand-rank="${escapeHtml(handRank)}">${escapeHtml(handRankPhrase(handRank))}</span>`;
+
+  // A fold-out: one winner, no ranks at all.
+  if (hand.winners.every((w) => w.handRank === null)) {
+    const total = hand.winners.reduce((sum, w) => sum + w.amount, 0);
+    return `Hand over. ${nameOf(hand.winners[0].seat)} won ${chips(total)}. Everyone else folded.`;
+  }
+
+  // Per seat: what it won in all, and the hand it won the contested pot(s)
+  // with ("Uncontested" side pots name no hand).
+  /** @type {Map<number, { amount: number; rank: string | null }>} */
+  const bySeat = new Map();
+  for (const w of hand.winners) {
+    const entry = bySeat.get(w.seat) ?? { amount: 0, rank: null };
+    entry.amount += w.amount;
+    if (isShowdownRank(w.handRank)) entry.rank = w.handRank;
+    bySeat.set(w.seat, entry);
+  }
+  const entries = [...bySeat.entries()];
+  if (entries.length === 1) {
+    const [seatNo, { amount, rank }] = entries[0];
+    return `Hand over. ${nameOf(seatNo)} won ${chips(amount)}${rank ? withRank(rank) : ""}.`;
+  }
+  // One pot shared equally (amounts within the odd chip) with the same hand:
+  // a split.
+  const amounts = entries.map(([, e]) => e.amount);
+  const ranks = new Set(entries.map(([, e]) => e.rank));
+  const oneRank = ranks.size === 1 ? entries[0][1].rank : null;
+  if (oneRank && Math.max(...amounts) - Math.min(...amounts) <= 1) {
+    const names = entries.map(([seatNo]) => nameOf(seatNo));
+    const who = `${names.slice(0, -1).join(", ")} and ${names[names.length - 1]}`;
+    const total = amounts.reduce((a, b) => a + b, 0);
+    return `Hand over. ${who} split ${chips(total)}${withRank(oneRank)}.`;
+  }
+  // Otherwise side pots went different ways: one clause each.
+  const clauses = entries.map(
+    ([seatNo, { amount, rank }]) => `${nameOf(seatNo)} won ${chips(amount)}${rank ? withRank(rank) : ""}`,
+  );
+  return `Hand over. ${clauses.join("; ")}.`;
+}
+
+// "Next hand in 4 s", counted down to the server's nextHandAt (brief 2 Step
+// 10); null when no deal is coming. The client's ticking timer calls this
+// too, so a tick and a fresh render say the same thing.
+/**
+ * @param {TableView} view
+ * @param {number} now
+ */
+export function nextHandLabel(view, now) {
+  if (!view.nextHandAt || !view.hand || view.hand.winners === null) return null;
+  const seconds = Math.ceil((new Date(view.nextHandAt).getTime() - now) / 1000);
+  return seconds > 0 ? `Next hand in ${seconds} s` : "Dealing…";
 }
 
 /**
@@ -273,7 +361,10 @@ function promptHtml(view, now) {
   const clock = turnClock(view, now);
   const clockHtml = clock ? `<span class="clock" data-clock>${clock.seconds}s</span>` : "";
   if (!hand || !shownHand(view)) return view.seats.length < 2 ? "Waiting for players. Two seated can deal." : "No hand yet. Deal when ready.";
-  if (!running) return winnersText(view);
+  if (!running) {
+    const next = nextHandLabel(view, now);
+    return winnersText(view) + (next ? ` <span class="next-hand" data-next-hand>${next}</span>` : "");
+  }
   if (myTurn) {
     const last = view.lastAction;
     let lastText = "";
