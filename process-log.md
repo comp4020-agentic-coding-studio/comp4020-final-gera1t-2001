@@ -2189,3 +2189,64 @@ leaves the tracked `mise.toml` alone. The change was committed on its own.
 **Curated prompt:** "Change the .gitignore line mise.local.toml to
 mise.local.toml* so editor backups of it are ignored too, commit that on its
 own, log it as [harness]. Don't push."
+
+## 2026-11-04 03:03 — [routine]
+
+**What happened:** The owner handed over `docs/final-brief-2.md` (Steps
+10–13: showdown for everyone, auto-deal, guest accounts, solo Casino
+Hold'em) and asked for it to be committed first, on its own.
+
+**What I did instead of the obvious thing:** Nothing beyond the ask: staged
+only that one file by path, read it in full first.
+
+**How I knew it was right:** `git status` showed it as the only untracked
+file; `git show --stat 96b08af` lists only `docs/final-brief-2.md`.
+
+**Citation:** `96b08af`.
+
+**Curated prompt:** "Read CLAUDE.md, then docs/final-brief-2.md. Commit the
+brief first, then do Step 10 only and stop."
+
+## 2026-11-04 03:39 — [harness]
+
+**What happened:** Step 10's red tests. Eight tests (20–27) in
+`spec/poker.test.ts` for the brief's red tests 1–7: symmetric showdown
+views for three seated players and a spectator, a preflop folder hidden,
+a fold-out winner hidden, `winners[]` carrying seat/amount/handRank,
+auto-deal (two present; one away; manual deal during the pause), and the
+turn length read from `TURN_TIMEOUT_SECONDS`. Red on the unfixed build: 20,
+21, 23, 24, 26.
+
+**What I did instead of the obvious thing:**
+- Test 20 first passed once in a full run on the unfixed build. Instead of
+  taking that as noise, I looked at the hand in the database: nets `0,0,0`,
+  a three-way split, where the engine shows every winner anyway. Tests 20
+  and 21 now deal again when every live hand is a winner, so a split can't
+  make them pass without the fix.
+- Every hand is dealt on a fresh engine (`startHand`), so
+  `state.handNumber` is always 1 (engine `dealing.js:241`, `handNumber:
+  state.handNumber + 1` on a new engine's 0). "A new handNumber" in the
+  brief can't be observed; the tests compare `handId` instead
+  (`dealing.js:242`, `` handId: `hand-${action.timestamp}-…` ``).
+- `cleanupTable` now retries a leave that's refused because the auto-deal
+  dealt a hand while it ran. Without it, the fix would turn every later
+  test red through leftover seats.
+- `TURN_TIMEOUT_SECONDS` stayed 30 in this commit. Test 27 compares against
+  the constant the server also reads, so it can't be red-first by a
+  default change. Its sensor is proved after the fix instead.
+- Process slip: this commit was made before `96b08af`'s log entry was
+  written, against `CLAUDE.md`'s "before commit N+1, append N's entry".
+  Both entries are written here, before the next commit.
+
+**How I knew it was right:**
+- Scratch server with short timings (`SHOWDOWN_PAUSE_MS=2500
+  TURN_TIMEOUT_SECONDS=8`, 3 s graces, `AWAY_TURN_SECONDS=3`), a fresh
+  database, the same env for `pnpm check`. Step 10 block run twice: the
+  same five red (20, 21, 23, 24, 26) both times. Test 20 alone, six runs:
+  red every time.
+- The rest of the suite stayed green with the new `cleanupTable` (51/55,
+  the four reds all Step 10's own; test 20 was the split-pot pass).
+
+**Citation:** `a7b5187` (`spec/poker.test.ts`, `src/poker/live.ts`).
+
+**Curated prompt:** (as above, Step 10 of `docs/final-brief-2.md`)
