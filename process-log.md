@@ -2159,3 +2159,33 @@ production. This replaces the PROBE_A login that failed on 22 Oct.
 **Curated prompt:** "I've added PROBE_A_USER, PROBE_A_PASS, PROBE_B_USER and
 PROBE_B_PASS to mise.local.toml. Read them through mise exec, never print the
 passwords. Carry on with Part 4 from registering the two PROBE accounts."
+
+## 2026-11-04 02:50 — [harness]
+
+**What happened:** During Part 4, an untracked `mise.local.toml.save` (an
+editor's save-on-exit backup) turned up in the repo root holding all four
+PROBE credentials, passwords included. `.gitignore` ignored only the exact
+name `mise.local.toml`, so a `git add -A` or `git add .` would have committed
+the passwords. The owner deleted both backups and asked for the ignore rule to
+be widened.
+
+**What I did instead of the obvious thing:** I changed the one existing line
+to `mise.local.toml*` rather than adding a second line for `.save`. The glob
+also covers `.save.1`, `~` and any other suffix an editor picks, and still
+leaves the tracked `mise.toml` alone. The change was committed on its own.
+
+**How I knew it was right:**
+- Red, before the change: `git check-ignore` reported the real
+  `mise.local.toml.save` as **not ignored** (02:22, Part 4).
+- Green, after the change: `git check-ignore --no-index` reports
+  `mise.local.toml`, `.save`, `.save.1` and `~` as ignored, and `mise.toml` as
+  not ignored.
+- `git status` shows only `docs/final-brief-2.md` untracked.
+- Not verified: the pattern doesn't catch backups an editor writes to another
+  directory, or names like `.mise.local.toml.swp` (vim's swap prefix).
+
+**Citation:** `fc740d2` (`.gitignore`).
+
+**Curated prompt:** "Change the .gitignore line mise.local.toml to
+mise.local.toml* so editor backups of it are ignored too, commit that on its
+own, log it as [harness]. Don't push."
