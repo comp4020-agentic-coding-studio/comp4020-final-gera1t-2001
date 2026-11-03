@@ -2060,3 +2060,48 @@ next boot. Not pushed: Part 3 stops for the owner.
 
 **Curated prompt:** "docs/wipe-and-push.md is mine, I just updated it. Read
 it and follow it."
+
+## 2026-11-04 02:10 — [judgement] (no commit)
+
+**What happened:** On the owner's "push" (Part 3 of `docs/wipe-and-push.md`),
+pushed `fffd55c`..`df8c82b`. CI and the deploy passed, and migration 0005 wiped
+production on boot. Part 4 stopped partway: the PROBE_A/PROBE_B credentials
+are not in this session's environment (neither the shell nor `mise exec`), so
+the PROBE accounts were not re-registered and the checks that need them did
+not run.
+
+**What I did instead of the obvious thing:**
+- The PROBE gate before the push was waived by the owner. PROBE_A could not
+  log in on production on 22 Oct, the wipe removes both PROBE accounts anyway,
+  and the owner checks by hand on a real phone. The backup taken in Part 1 is
+  the only way back.
+- When the credentials turned out to be missing, I did not register stand-in
+  accounts on production. That would have put made-up users into a database
+  the owner had just wiped for a clean start, and the run names the PROBE
+  credentials specifically. I stopped and reported instead.
+- I pushed exactly `df8c82b` by hash, and `docs/final-brief-2.md` stays
+  untracked. Steps 7–9 had already been deployed in `d8795ad`, so this deploy
+  carried only the run file, the migration and log entries.
+
+**How I knew it was right:**
+- CI run 41658639459: check passed (spec against the Docker image, evidence,
+  both secret scans), then deploy passed, including "Verify the deployed site
+  is online".
+- Production, read-only, counts only: users 0, sessions 0,
+  security_questions 0, seats 0, table_state 0, hand_results 0;
+  poker_tables 1. `schema_migrations` lists `0005_wipe_accounts.sql`, applied
+  2026-11-03T15:01:22Z.
+- Before anyone registered, headless Chromium loaded `/` signed out at
+  1920×1080 and 390×844. Both returned 200, Regulars read "No one has
+  registered yet.", the hero read "Table's open, 6 seats free",
+  `scrollWidth - innerWidth` was 0 and there were no console errors.
+- Backup: `~/house-game-backups/backup-2026-11-04.sqlite3`, sha256
+  `7ed59469…bb8485e5`.
+- Not verified: the PROBE registration and login, `/tables/1` signed in at
+  both viewports, the two-browser hand with Live pill, the production latency
+  probe, a real phone. All of these wait on the credentials or the owner.
+
+**Citation:** `fffd55c`..`df8c82b` on origin/main; GitHub Actions run
+41658639459.
+
+**Curated prompt:** "push"
