@@ -7,6 +7,7 @@ import {
   AWAY_STAND_TIMEOUTS,
   AWAY_TURN_SECONDS,
   BOOT_GRACE_MS,
+  SHOWDOWN_PAUSE_MS,
   SSE_HEARTBEAT_MS,
   TURN_TIMEOUT_SECONDS,
 } from "../src/poker/live.ts";
@@ -19,11 +20,12 @@ const isLocal = ["localhost", "127.0.0.1"].includes(new URL(baseUrl).hostname);
 const TABLE_ID = 1;
 
 // Tests 7 and 8 wait past a real turn_deadline. CI starts the app with no
-// TURN_TIMEOUT_SECONDS override, so that deadline is the real default (30s);
-// each of those two tests gets a per-test timeout well past that. Run
-// locally with a short TURN_TIMEOUT_SECONDS to iterate faster, but the
-// deadline itself is always read from the view, never assumed — these tests
-// pass at 30s or at 1s without caring which.
+// TURN_TIMEOUT_SECONDS override, so that deadline is the real default (20s
+// since docs/final-brief-2.md; 30s before); each of those two tests gets a
+// per-test timeout well past that. Run locally with a short
+// TURN_TIMEOUT_SECONDS to iterate faster, but the deadline itself is always
+// read from the view, never assumed — these tests pass at 20s or at 1s
+// without caring which. Every override is listed in src/poker/live.ts.
 //
 // The per-test timeout has to cover the wait past the deadline itself PLUS
 // the budget given afterward for the push to actually land — not half of a
@@ -89,10 +91,17 @@ interface HandPlayer {
   hand: [string, string] | [null, null] | null;
 }
 
+interface Winner {
+  seat: number;
+  amount: number;
+  handRank: string | null;
+}
+
 interface HandView {
+  handId: string;
   street: string;
   actionTo: number | null;
-  winners: unknown[] | null;
+  winners: Winner[] | null;
   players: (HandPlayer | null)[];
   pots: { amount: number }[];
   currentBets: Record<string, number>; // final brief Step 7: bets in front, by seat
@@ -112,6 +121,9 @@ interface TableView {
   hand: HandView | null;
   turnDeadline: string | null;
   lastAction: LastAction | null;
+  turnSeconds?: number | null;
+  // Brief 2 Step 10: when the next hand deals itself, or null.
+  nextHandAt?: string | null;
   // Final brief Step 4: who was just stood up for being away, so the page
   // can say why a seat emptied.
   notice?: { type: string; players: { userId: number; displayName: string }[] } | null;
@@ -192,16 +204,32 @@ async function act(cookie: string, type: string, amount?: number): Promise<Table
 
 // Folds whoever's left in a hand down to a finish (irrespective of what a
 // test did or didn't do), then empties every seat — leaves the shared table
-// ready for the next test regardless of how the current one ended.
+// ready for the next test regardless of how the current one ended. Since
+// brief 2 Step 10 a finished hand deals the next one by itself after
+// SHOWDOWN_PAUSE_MS, so a leave can land on a hand that was dealt while this
+// ran ("can't leave mid-hand"); then it folds that one down too and retries.
 async function cleanupTable(players: Player[]): Promise<void> {
-  for (let guard = 0; guard < 10; guard++) {
-    const view = await getView(players[0].cookie).catch(() => undefined);
-    if (!view?.hand || view.hand.winners !== null || view.hand.actionTo === null) break;
-    const actor = players.find((p) => p.seatNo === view.hand!.actionTo);
-    if (!actor) break;
-    await act(actor.cookie, "fold").catch(() => undefined);
+  for (let round = 0; round < 5; round++) {
+    for (let guard = 0; guard < 10; guard++) {
+      const view = await getView(players[0].cookie).catch(() => undefined);
+      if (!view?.hand || view.hand.winners !== null || view.hand.actionTo === null) break;
+      const actor = players.find((p) => p.seatNo === view.hand!.actionTo);
+      if (!actor) break;
+      await act(actor.cookie, "fold").catch(() => undefined);
+    }
+    let allGone = true;
+    for (const p of players) {
+      const res = await fetch(new URL(`/tables/${TABLE_ID}/leave`, baseUrl), {
+        method: "POST",
+        headers: { cookie: p.cookie },
+      }).catch(() => undefined);
+      if (res && !res.ok) {
+        const body = (await res.json().catch(() => ({}))) as { error?: string };
+        if (!/not seated/i.test(body.error ?? "")) allGone = false;
+      }
+    }
+    if (allGone) return;
   }
-  for (const p of players) await leaveTable(p.cookie);
 }
 
 interface SseEvent {
@@ -1152,5 +1180,261 @@ describe.skipIf(!isLocal)("table page (writes test data — local only)", () => 
     expect(doc.querySelectorAll(".board .card:not(.slot)").length).toBe(0);
     expect(doc.querySelector(".said")).toBeNull();
     expect(doc.querySelector("[data-pot]")).toBeNull();
+  });
+});
+
+// Brief 2 Step 10: showdown for everyone, and no dead time. Every hand that
+// reaches a showdown is tabled for every viewer alike; folded hands are never
+// shown to anyone else; a fold-out is not a showdown. A finished hand deals
+// the next one by itself after SHOWDOWN_PAUSE_MS when two seated players are
+// present. In this file because every test here plays on table 1.
+describe.skipIf(!isLocal)("showdown for everyone, and no dead time (writes test data — local only)", () => {
+  let players: Player[] = [];
+  const streams: SseConnection[] = [];
+
+  afterEach(async () => {
+    for (const s of streams) s.close();
+    streams.length = 0;
+    await cleanupTable(players);
+    players = [];
+  });
+
+  function holdStream(p: Player): SseConnection {
+    const s = connectSse(p.cookie);
+    streams.push(s);
+    return s;
+  }
+
+  // A hand is fully visible in a view only if it holds two real cards.
+  function isVisible(hand: HandPlayer["hand"] | undefined): boolean {
+    return Array.isArray(hand) && hand.length === 2 && hand.every((c) => typeof c === "string");
+  }
+
+  // The (seatNo, hand) pairs a viewer can see, as sorted "seat:card,card"
+  // keys, so two viewers' sets compare with toEqual.
+  function visibleSet(view: TableView): string[] {
+    const out: string[] = [];
+    for (const p of view.hand!.players) if (p && isVisible(p.hand)) out.push(`${p.seat}:${p.hand!.join(",")}`);
+    return out.sort();
+  }
+
+  // Plays the current hand to its end. `decide` picks each actor's move;
+  // "pass" is check if nothing is owed, otherwise call.
+  async function playOut(
+    start: TableView,
+    decide: (actor: Player, view: TableView) => "fold" | "pass" = () => "pass",
+  ): Promise<TableView> {
+    let view = start;
+    for (let guard = 0; guard < 40 && view.hand!.winners === null; guard++) {
+      const actor = players.find((p) => p.seatNo === view.hand!.actionTo);
+      if (!actor) throw new Error(`seat ${view.hand!.actionTo} is to act but isn't one of this test's players`);
+      if (decide(actor, view) === "fold") {
+        view = await act(actor.cookie, "fold");
+        continue;
+      }
+      const me = view.hand!.players[actor.seatNo]!;
+      const owed = Math.max(...view.hand!.players.map((p) => p?.betThisStreet ?? 0)) - me.betThisStreet;
+      view = await act(actor.cookie, owed > 0 ? "call" : "check");
+    }
+    expect(view.hand!.winners).not.toBeNull();
+    return view;
+  }
+
+  // Every viewer's view of the hand that just ended: the seated players and
+  // one signed-in spectator. Read before the next hand deals itself; each is
+  // checked to still be that hand.
+  async function viewsOf(handId: string, spectator: string): Promise<{ viewer: string; view: TableView }[]> {
+    const cookies = [...players.map((p) => ({ viewer: p.username, cookie: p.cookie })), { viewer: "spectator", cookie: spectator }];
+    const out = [];
+    for (const { viewer, cookie } of cookies) {
+      const view = await getView(cookie);
+      expect(view.hand!.handId, `${viewer}'s view moved on to another hand before it was read`).toBe(handId);
+      out.push({ viewer, view });
+    }
+    return out;
+  }
+
+  async function threeSeatedAndASpectator(): Promise<string> {
+    players = [await registerAndSit(), await registerAndSit(), await registerAndSit()];
+    return register(randomUsername());
+  }
+
+  it("20. symmetry: after a showdown every viewer, seated or spectating, sees the same tabled hands", async () => {
+    const spectator = await threeSeatedAndASpectator();
+    // A split pot between all three is shown to everyone by the engine anyway
+    // (every winner shows), so it can't tell a fix from no fix: deal again.
+    // Seen once on 4 Nov, as a run where this test passed before the fix.
+    let ended = await playOut(await startHand(players[0].cookie));
+    for (let tries = 0; ended.hand!.winners!.length === players.length && tries < 5; tries++) {
+      ended = await playOut(await startHand(players[0].cookie));
+    }
+    expect(ended.hand!.winners!.length).toBeLessThan(players.length);
+    const views = await viewsOf(ended.hand!.handId, spectator);
+    const expected = visibleSet(views[0].view);
+    // Nobody folded, so all three hands are live and all three are tabled.
+    expect(expected).toHaveLength(3);
+    for (const { viewer, view } of views) expect(visibleSet(view), viewer).toEqual(expected);
+  });
+
+  it("21. a hand folded preflop stays hidden from everyone else; the two that reach showdown are shown to all", async () => {
+    const spectator = await threeSeatedAndASpectator();
+    // The first to act preflop folds; the other two check or call it down. A
+    // split between those two is shown to all by the engine anyway, so it
+    // can't tell a fix from no fix (as in test 20): deal again.
+    let folder: Player;
+    let ended: TableView;
+    for (let tries = 0; ; tries++) {
+      const dealt = await startHand(players[0].cookie);
+      const first = players.find((p) => p.seatNo === dealt.hand!.actionTo)!;
+      let folded = false;
+      ended = await playOut(dealt, (actor) => {
+        if (actor !== first || folded) return "pass";
+        folded = true;
+        return "fold";
+      });
+      expect(folded).toBe(true);
+      folder = first;
+      if (ended.hand!.winners!.length < 2 || tries >= 5) break;
+    }
+    expect(ended.hand!.winners!.length).toBe(1);
+    const live = players.filter((p) => p !== folder).map((p) => p.seatNo);
+    for (const { viewer, view } of await viewsOf(ended.hand!.handId, spectator)) {
+      // The folder's own view still holds their own cards, as it always has;
+      // the rule is that nobody else's does.
+      if (viewer !== folder.username) expect(isVisible(view.hand!.players[folder.seatNo]!.hand), viewer).toBe(false);
+      for (const seat of live) expect(isVisible(view.hand!.players[seat]!.hand), `${viewer}, seat ${seat}`).toBe(true);
+    }
+  });
+
+  it("22. a fold-out is not a showdown: the winner's cards stay hidden from every other viewer", async () => {
+    const spectator = await threeSeatedAndASpectator();
+    const ended = await playOut(await startHand(players[0].cookie), () => "fold");
+    const winners = ended.hand!.winners!;
+    expect(winners).toHaveLength(1);
+    const winner = players.find((p) => p.seatNo === winners[0].seat)!;
+    for (const { viewer, view } of await viewsOf(ended.hand!.handId, spectator)) {
+      if (viewer === winner.username) continue;
+      expect(isVisible(view.hand!.players[winner.seatNo]!.hand), viewer).toBe(false);
+    }
+  });
+
+  it("23. the result is in the view: seat, amount and handRank per winner; handRank null after a fold-out", async () => {
+    players = [await registerAndSit(), await registerAndSit()];
+    const showdown = await playOut(await startHand(players[0].cookie));
+    for (const w of showdown.hand!.winners!) {
+      expect(players.map((p) => p.seatNo)).toContain(w.seat);
+      expect(w.amount).toBeGreaterThan(0);
+      expect(typeof w.handRank).toBe("string");
+      expect(w.handRank!.length).toBeGreaterThan(0);
+    }
+    // And the prompt names it: the table page's prompt carries the rank it
+    // shows, for every viewer.
+    for (const p of players) {
+      const res = await fetch(new URL(`/tables/${TABLE_ID}`, baseUrl), { headers: { cookie: p.cookie } });
+      const doc = new JSDOM(await res.text()).window.document;
+      const ranks = [...doc.querySelectorAll("[data-prompt] [data-hand-rank]")].map((el) => el.getAttribute("data-hand-rank"));
+      expect(ranks).toEqual([showdown.hand!.winners![0].handRank]);
+    }
+
+    const foldOut = await playOut(await startHand(players[0].cookie), () => "fold");
+    expect(foldOut.hand!.winners!.map((w) => w.handRank)).toEqual([null]);
+  });
+
+  it(
+    "24. auto-deal: two present players get a new hand within SHOWDOWN_PAUSE_MS, with no POST to /start",
+    { timeout: SHOWDOWN_PAUSE_MS + 15_000 },
+    async () => {
+      players = [await registerAndSit(), await registerAndSit()];
+      for (const p of players) holdStream(p);
+      const ended = await playOut(await startHand(players[0].cookie), () => "fold");
+      const endedAt = Date.now();
+      // The view says when, from the server's clock.
+      expect(ended.nextHandAt).toBeTruthy();
+      const nextAt = new Date(ended.nextHandAt!).getTime();
+      expect(Math.abs(nextAt - endedAt - SHOWDOWN_PAUSE_MS)).toBeLessThan(1000);
+
+      let next: TableView | undefined;
+      while (Date.now() - endedAt < SHOWDOWN_PAUSE_MS + 2000) {
+        const view = await getView(players[0].cookie);
+        if (view.hand!.handId !== ended.hand!.handId) {
+          next = view;
+          break;
+        }
+        await sleep(100);
+      }
+      expect(next, "no new hand was dealt").toBeDefined();
+      expect(Date.now() - endedAt).toBeGreaterThanOrEqual(SHOWDOWN_PAUSE_MS - 500); // not early
+      expect(next!.hand!.winners).toBeNull();
+      expect(next!.nextHandAt).toBeNull();
+    },
+  );
+
+  it(
+    "25. no auto-deal with one present and one away",
+    { timeout: AWAY_GRACE_MS + BOOT_GRACE_MS + 2 * TURN_TIMEOUT_SECONDS * 1000 + SHOWDOWN_PAUSE_MS + 20_000 },
+    async () => {
+      players = [await registerAndSit(), await registerAndSit()];
+      const [alice, bob] = players;
+      holdStream(alice);
+      const bobStream = connectSse(bob.cookie);
+      let view = await startHand(alice.cookie);
+      // Bob's call (a POST) would count as being here, so it comes first.
+      if (view.hand!.actionTo === bob.seatNo) view = await act(bob.cookie, "call");
+      bobStream.close();
+      const start = Date.now();
+      while (Date.now() - start < AWAY_GRACE_MS + BOOT_GRACE_MS + 2000) {
+        view = await getView(alice.cookie);
+        if (view.seats.find((s) => s.userId === bob.userId)?.away) break;
+        await sleep(250);
+      }
+      expect(view.seats.find((s) => s.userId === bob.userId)?.away).toBe(true);
+
+      // End the hand: alice folds on her turn; bob's turns time out.
+      for (let guard = 0; guard < 20; guard++) {
+        view = await getView(alice.cookie);
+        if (view.hand!.winners !== null) break;
+        if (view.hand!.actionTo === alice.seatNo) await act(alice.cookie, "fold").catch(() => undefined);
+        else await sleep(500);
+      }
+      expect(view.hand!.winners).not.toBeNull();
+      expect(view.nextHandAt ?? null).toBeNull();
+      await sleep(SHOWDOWN_PAUSE_MS + 1500);
+      const after = await getView(alice.cookie);
+      expect(after.hand!.handId).toBe(view.hand!.handId);
+    },
+  );
+
+  it(
+    "26. a manual deal during the pause starts exactly one hand, and the pause after it is a full one",
+    { timeout: 3 * SHOWDOWN_PAUSE_MS + 15_000 },
+    async () => {
+      players = [await registerAndSit(), await registerAndSit()];
+      for (const p of players) holdStream(p);
+      await playOut(await startHand(players[0].cookie), () => "fold");
+      const firstEnd = Date.now();
+
+      // Deal by hand halfway into the pause, then fold that hand out at once,
+      // so it ends well before the first pause would have.
+      await sleep(SHOWDOWN_PAUSE_MS / 2);
+      const manual = await startHand(players[0].cookie);
+      const second = await playOut(manual, () => "fold");
+      const secondEnd = Date.now();
+      // The countdown restarted from the second hand's end.
+      expect(new Date(second.nextHandAt!).getTime()).toBeGreaterThan(firstEnd + SHOWDOWN_PAUSE_MS);
+
+      // Halfway between when the first pause would have ended and when the
+      // second one does: a timer left over from the first hand would have
+      // dealt by now; the second's mustn't have yet.
+      await sleep((firstEnd + SHOWDOWN_PAUSE_MS + secondEnd + SHOWDOWN_PAUSE_MS) / 2 - Date.now());
+      const mid = await getView(players[0].cookie);
+      expect(mid.hand!.handId).toBe(second.hand!.handId);
+      expect(mid.hand!.winners).not.toBeNull();
+    },
+  );
+
+  it("27. a fresh turn lasts TURN_TIMEOUT_SECONDS", async () => {
+    players = [await registerAndSit(), await registerAndSit()];
+    const dealt = await startHand(players[0].cookie);
+    expect(dealt.turnSeconds).toBe(TURN_TIMEOUT_SECONDS);
   });
 });

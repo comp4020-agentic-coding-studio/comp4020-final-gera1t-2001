@@ -2,7 +2,13 @@
 // imports nothing from the app, so spec/ can read the same numbers the server
 // uses (importing src/server.ts would start a server; src/poker/table.ts opens
 // the database). The env overrides are read once at boot, so a test run that
-// shortens one has to set it for the app and for `pnpm check` alike.
+// shortens one has to set it for the app and for `pnpm check` alike:
+//
+//   TURN_TIMEOUT_SECONDS, SHOWDOWN_PAUSE_MS, AWAY_GRACE_MS, BOOT_GRACE_MS,
+//   AWAY_TURN_SECONDS, AWAY_STAND_TIMEOUTS, AWAY_STAND_MS
+//
+// e.g. `SHOWDOWN_PAUSE_MS=2000 node src/server.ts` in one shell and
+// `SHOWDOWN_PAUSE_MS=2000 pnpm check` in the other. CI sets none of them.
 
 // GET /tables/:id/events sends a named "ping" event this often, pushes or
 // not, so a client can tell a quiet table from a dead stream.
@@ -16,6 +22,11 @@ export const SSE_RETRY_MS = 2_000;
 // the server acts for you after this long: check if checking is legal,
 // otherwise fold.
 export const TURN_TIMEOUT_SECONDS = Number(process.env.TURN_TIMEOUT_SECONDS ?? 30);
+
+// Owner decision (docs/final-brief-2.md, 4 Nov): a finished hand stays on the
+// felt this long, then the next hand deals itself if at least two seated
+// players are present (not away). Otherwise someone presses Deal next hand.
+export const SHOWDOWN_PAUSE_MS = Number(process.env.SHOWDOWN_PAUSE_MS ?? 6_000);
 
 // --- Presence and ghost seats (owner decision, 18 Oct; final brief Step 4) --
 // The owner may tune these after a real game. The two stand-up numbers were
