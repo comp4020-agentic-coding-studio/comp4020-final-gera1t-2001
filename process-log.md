@@ -2250,3 +2250,93 @@ turn length read from `TURN_TIMEOUT_SECONDS`. Red on the unfixed build: 20,
 **Citation:** `a7b5187` (`spec/poker.test.ts`, `src/poker/live.ts`).
 
 **Curated prompt:** (as above, Step 10 of `docs/final-brief-2.md`)
+
+## 2026-11-04 05:15 — [judgement]
+
+**What happened:** Step 10's fix. At a showdown with two or three players,
+the loser saw every hand and the winner saw only their own. The 22 Oct
+Step 7 entry saw exactly this and called it correct: "showdown faces shown
+only for the hand not mucked" (log, 2026-10-22 01:50). It matched the
+engine, not what the owner wants at a home game.
+
+**What I did instead of the obvious thing:**
+- No masking of my own. Once a hand ends at a showdown with more than one
+  live hand, `tableShowdownHands` dispatches the engine's own `SHOW` for
+  each, in `prepareAction`, before `commitPreparedAction` snapshots it. The
+  engine source that decides it:
+  - `dist/rules/showdown.js` `determineWinners()`: "All live hands are
+    tabled when betting ends with an all-in. Otherwise, winners show and
+    losing hands remain mucked by default." (winners get `shownCards`
+    every index, losers `null`).
+  - `dist/utils/view-masking.js` `getVisibleHand()`: at `SHOWDOWN`, an
+    ACTIVE/ALL_IN opponent with `shownCards === null` → `return null;`.
+  - `dist/engine/game-reducer.js:87`, `case "SHOW"` → `handleShow`.
+    `dist/actions/showdown-actions.js:15-23` throws "Can only show cards at
+    showdown" off `SHOWDOWN` and "Cannot show cards after folding" for a
+    FOLDED player.
+  - A fold-out also ends on street `SHOWDOWN` (`betting.js`
+    `awardPotToLastPlayer`), so the live-player count, not the street,
+    tells them apart.
+  - Real actions and the turn timer both reach it: `engine.act` is called
+    only in `prepareAction`, and `runTimeout` → `applyAction` →
+    `prepareAction`.
+- `handRank` isn't "Two Pair, Kings and Tens" as the brief says. It's the
+  category alone: `showdown.js:137-138`, `rankDescription(rank(cardCodes))`,
+  one of nine strings in evaluator `dist/models/hand-rank.js:21-31`. The
+  prompt says "won 140 with two pair". Kickers would need
+  `winners[].hand`, the owner's call.
+- The Opus review found 11 things. Acted on:
+  - An auto-deal that failed with a non-`PokerError` (a busted seat: the
+    engine won't seat a 0 stack, `validation.js:193`, "Stack must be
+    positive") left "Dealing…" on every page. Now every failure
+    broadcasts, and the two needed must have chips.
+  - The auto-deal went through `startHand`'s stand-up-the-away step, which
+    turned "stood up after 5 timeouts or 5 min" into "stood up 6 s after
+    any hand ends". The auto-deal now deals present players and stands
+    nobody up; a manual deal still does, as Step 4 set.
+  - Side pots: the engine names a one-player pot "Uncontested", which made
+    "birch and ash split 160" out of two separate pots. Now one clause per
+    winner. Checked with real engine-shaped winners in a scratch render:
+    "birch won 100; ash won 60 with two pair."
+  - Test 26 couldn't catch a stale timer dealing early; it now has a part
+    that does.
+  - Also: `nextHandAt` armed after stand-ups; no auto-deal re-armed on boot
+    (presence unknown in the boot grace); `cleanupTable` throws instead of
+    leaving seats; stale "30 s" comments; the countdown's wrap indent.
+- Not acted on, flagged to the owner: a hand that ends inside `deal()`
+  (both blinds all-in) is never settled in `startHand`, and busted seats
+  stay seated at 0. Both predate this step. `README.md:14` still says "30
+  seconds"; README is the owner's.
+
+**How I knew it was right:**
+- `pnpm check` 55/55: twice with short timings (`SHOWDOWN_PAUSE_MS=2500`,
+  `TURN_TIMEOUT_SECONDS=8`, 3 s graces), once with CI's defaults (20 s, 6 s;
+  185 s run), and again after the last render-only change.
+- Deliberate breaks, each restored and `cmp`'d against a good copy:
+  - `SHOW` off → only 20 and 21 red.
+  - Scheduler off → only 24 and 26 red.
+  - `startHand`'s cancel and `runAutoDeal`'s version check both off → 26 red.
+  - Presence check and the auto-deal's away filter both off → 25 red.
+    Either one alone stays green, by design.
+  - App at `TURN_TIMEOUT_SECONDS=9`, spec at 8 → 27 red ("expected 9 to
+    be 8").
+- Two Playwright contexts at 1920×1080 and 390×844, CI timings:
+  - After a showdown, each page draws the other's dock cards exactly.
+  - After a fold-out, neither page draws the winner's faces.
+  - The countdown ticks "6 s" → "5 s", and the auto-dealt hand arrived on
+    both pages about 6.6 s after the hand ended.
+  - No overflow, no console errors.
+  - A real split pot came up: "split 20 with a pair". I looked at the
+    screenshots.
+- Not verified: a real phone backgrounding the tab (the visibilitychange
+  change is read, not exercised); production. One full run before the
+  review fixes had ghost-seat test 3 red ("4964 to be ≤ 4000"): a window
+  between `away` turning true and the presence timer pulling the deadline
+  in. That code is unchanged since `a7b5187`; 1 in 8 full runs since. Not
+  fixed here, flagged.
+
+**Citation:** `a7b5187` (red) → `5ce1305` (green): tests 20, 21, 23, 24, 26
+red → green.
+
+**Curated prompt:** "Read CLAUDE.md, then docs/final-brief-2.md. Commit the
+brief first, then do Step 10 only and stop."
