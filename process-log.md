@@ -2105,3 +2105,57 @@ not run.
 41658639459.
 
 **Curated prompt:** "push"
+
+## 2026-11-04 02:40 — [judgement] (no commit)
+
+**What happened:** Finished Part 4 of `docs/wipe-and-push.md` once the owner
+added the PROBE credentials to `mise.local.toml`. Both PROBE accounts were
+re-registered on the wiped production, and both log in. The two-browser
+hand passed at both viewports, and so did the latency probe against
+production. This replaces the PROBE_A login that failed on 22 Oct.
+
+**What I did instead of the obvious thing:**
+- Before registering, I ran both credential pairs through the app's own
+  `registerErrors()` locally, printing pass/fail only. That way a rejection on
+  production couldn't be confused with a bad credential. Both passed.
+- I showed that the login check can go red. One deliberate wrong-password
+  login for A got 400 and no session cookie, and the right passwords got 303
+  and a session. The code has no lockout on login (only on recovery
+  questions), so the bad try cost nothing.
+- In the browsers, both accounts logged in through the real `/login` form,
+  not by injecting cookies, so the form path on production is covered.
+- Screenshots of the hand show the PROBE usernames. They were written into
+  the repo directory by a relative path, found as untracked in
+  `git status`, and moved to `~/run-scratch/prod-shots/` before anything was
+  staged. Usernames are kept out of this entry and every other committed file.
+- An untracked editor backup next to `mise.local.toml` turned out to hold the
+  PROBE credentials, and `.gitignore` doesn't cover it. I left it untouched
+  and flagged it to the owner. I only stage files by explicit path.
+
+**How I knew it was right:**
+- Register: A 303 → `/tables/1`, B 303 → `/tables/1`, both with a session
+  cookie. Login: A and B 303 → `/tables/1` with a session cookie. Wrong
+  password: 400, no cookie.
+- Two headless Chromium contexts (separate cookie jars) at 1920×1080 and
+  390×844: login form → `/tables/1`, pill Live. Both sit, A deals, and one
+  hand is played by clicking (call, then checks) to showdown. Every action
+  showed on the other page: median 58 ms / max 69 ms at 1920, median 61 ms /
+  max 66 ms at 390, 13 actions each. Both pages read "Hand over", the pill
+  stayed Live, `scrollWidth - innerWidth` was 0, no console errors, and both
+  left. In the screenshots, each player sees only their own hole cards before
+  showdown, and the winner's cards show at showdown.
+- `pnpm probe:latency` against production, 30 actions: delivery median
+  25 ms, p95 31 ms, max 33 ms, 0/30 missed. Stream gaps during actions:
+  median 36 ms, max 45 ms. Idle hold: 13 messages, max gap 5005 ms against a
+  5 s heartbeat. Both left.
+- Production afterwards, read-only counts: users 2, seats 0, table_state 1,
+  hand_results 16, security_questions 4, sessions 10.
+- Not verified: a real phone (the owner's hand check), more than two players
+  on production, screen readers.
+
+**Citation:** `fffd55c`..`df8c82b` deployed by GitHub Actions run
+41658639459; this entry follows `88e7318`.
+
+**Curated prompt:** "I've added PROBE_A_USER, PROBE_A_PASS, PROBE_B_USER and
+PROBE_B_PASS to mise.local.toml. Read them through mise exec, never print the
+passwords. Carry on with Part 4 from registering the two PROBE accounts."
