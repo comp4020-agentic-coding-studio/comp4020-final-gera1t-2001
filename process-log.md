@@ -1950,3 +1950,64 @@ copy.
 
 **Curated prompt:** "Part 4: brief Step 9, except the push. Do the full walk
 at both viewports. Run the latency probe against local only for now."
+
+## 2026-11-04 01:38 — [judgement] (no commit)
+
+**What happened:** Pushed the five commits the 2026-10-22 run had held
+(`f7857d3`..`d8795ad`, Steps 7–9 and their log entries), CI built and
+deployed them, and / and /tables/1 were loaded on the live site at both
+viewports.
+
+**What I did instead of the obvious thing:** The run's push gate also
+requires the latency probe and multi-user checks against production with the
+PROBE accounts. Production still rejects those accounts, which is why the push
+was held on 2026-10-22. The owner waived that gate for this push and will check
+production by hand, so I pushed on the local gates alone and did not run
+the production probe. I pushed exactly `d8795ad` (`git push origin
+d8795ad:refs/heads/main`), so nothing else in the working tree could go
+with it. `docs/final-brief-2.md` and `docs/wipe-and-push.md` stay untracked.
+
+**How I knew it was right:**
+- The local app was started the way it was for Step 9 (`run-scratch/serve.sh`,
+  port 8090, a throwaway DB). `APP_URL=http://localhost:8090 pnpm check`
+  passed 47/47, and `pnpm check:evidence` passed (8 cited commits resolve).
+- Push `7eef4a6..d8795ad`. CI run 41654690228: check passed (spec against the
+  Docker image, evidence, both secret scans), then deploy passed, including
+  "Verify the deployed site is online" (14:32–14:37 UTC).
+- Headless Chromium against https://comp4020-final-gera1t-2001.fly.dev,
+  signed out, at 1920×1080 and 390×844. `/` returned 200 with the hero ("Table's
+  open, 6 seats free", Take a seat) and Regulars. `/tables/1` redirected to
+  `/login` as designed. `scrollWidth - innerWidth` was 0 and there were no console
+  errors on all four.
+- Not verified: the live table when signed in (no working production
+  account), the production latency probe, the multi-user checks on production,
+  a real phone. All of this is waived to the owner's hand check.
+
+**Citation:** `f7857d3`..`d8795ad` on origin/main; GitHub Actions run
+41654690228.
+
+**Curated prompt:** "Push the 5 local commits that are ahead of origin/main,
+nothing else. Run pnpm check and pnpm check:evidence; push only if both are
+green. The PROBE production gate is waived by the owner for this push. Watch
+CI and the deploy, then load / and /tables/1 on the live site at 1920x1080
+and 390x844. Do not commit docs/final-brief-2.md."
+
+## 2026-11-04 01:41 — [routine]
+
+**What happened:** The owner left `docs/wipe-and-push.md`, one run covering
+a production backup, a migration that wipes every account, and the push,
+and asked for it to be committed on its own first.
+
+**What I did instead of the obvious thing:** Nothing beyond the ask. The file
+was committed unedited and `docs/final-brief-2.md` stays untracked. One
+mismatch was noted for Part 3's stop: the file assumes Steps 7–9 go out in
+the same deploy as the wipe, but they were pushed in the previous entry, so
+the wipe will deploy on its own.
+
+**How I knew it was right:** `git show --stat fffd55c` lists only that file.
+
+**Citation:** `fffd55c` (`docs/wipe-and-push.md`).
+
+**Curated prompt:** "docs/wipe-and-push.md is mine, I just updated it. Read
+it and follow it. Commit that file first, on its own, with a log entry.
+Leave docs/final-brief-2.md uncommitted."
