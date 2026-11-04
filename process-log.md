@@ -2625,3 +2625,87 @@ cross-site POST to /guest or /logout…" red → green.
 
 **Curated prompt:** "Read CLAUDE.md, then docs/final-brief-2.md. Step 10
 and its follow-ups are done. Do Step 11 only and stop."
+
+## 2026-11-04 22:56 — [judgement]
+
+**What happened:** Two owner decisions on Step 11. (1) Guest display names
+are an animal plus two digits ("Wombat 27"), with each avatar letter coming
+from the animal and two guests at one table told apart at 390 px. (2) Guest
+sessions slide: on any request, under 15 days left extends to 30 days from
+now. ADR 0005's Consequences updated to match.
+
+**What I did instead of the obvious thing:**
+- **Letters, not just names.** The obvious version picks a random animal.
+  Two guests could then both be "Koala", with the same "K" avatar. Instead:
+  - every one of the 24 animals starts with a different letter;
+  - a new guest gets an animal whose letter no seated player's avatar
+    already shows.
+  - Animals are six letters at most, to fit the phone's plate.
+  - The limit, recorded in the code comment and the ADR: it holds for the
+    table as it is when the guest is made. Two guests made before either
+    sits can share an animal, and differ only in their digits.
+- **Slide in one statement.** `slideGuestSession` is a single `UPDATE …
+  WHERE expires_at > now AND expires_at < now + 15 days AND user is a
+  guest`, so the check and the write can't be split by a second request. It
+  runs in a middleware before every route, and re-sends the cookie with the
+  new expiry and the same token.
+  - Read from source (`node_modules/hono/dist/context.js`, `set res`):
+    Set-Cookie headers set before the route are kept and appended to on the
+    route's response. So a route that logs out or signs in afterwards adds
+    its own cookie, and that one comes last.
+- **A second test-only route, under the same gate.** Reaching "under 15
+  days left" inside a test needs a moved expiry. `POST /test-hooks/session`
+  sits beside the stacks route under the same rule (`TEST_HOOKS=1` and not
+  production). Test 5b now proves both routes are absent in CI, and
+  `spec/README.md` lists both.
+- **Not changed: the seat plate's width.** At 390 px a six-letter animal
+  plus digits ("Wombat 98") is cut to "Womba…" by the deployed 4.9 rem seat,
+  and at 1920 px the " (you)" tag can cut a name, as before. I didn't change
+  it, because brief 2 keeps the table's look as deployed. The owner's
+  criterion still holds, and the browser check asserts exactly that: the two
+  avatars differ, and the plates start differently.
+
+**How I knew it was right:**
+- **`pnpm check` with short overrides and `TEST_HOOKS=1`, fresh DB:** 83
+  passed, 1 skipped (5b, by design).
+- **CI-shaped run** (`NODE_ENV=production`, the app also given
+  `TEST_HOOKS=1` to show the gate holds, the spec not told): 76 passed, 8
+  skipped. The skips are the 5 sliding tests, 28 and 31 (need hooks), and
+  the window-expiry test. The server printed no "test hooks are ON".
+- **Deliberate breaks, each restored and `cmp`'d:**
+  - no slide → only "under 15 days … extended" red;
+  - slide for registered accounts too → "registered … doesn't slide" and
+    "claimed … stops sliding" red;
+  - always the first animal (inside `guestDisplayName`) → the pure picker
+    test and test 35 red ("expected 1 to be 3");
+  - the old "Guest NNNN" name → the name-format test and test 35 red.
+- **One break that first stayed green, and why.** My first letter break
+  only replaced the first pick. The retry loop still called the real picker
+  with the taken letters, so test 35 passed. That was a break that didn't
+  break anything, not a weak test. I moved the break inside the picker and
+  it went red.
+  - While checking it, a manual rerun hit the previous break's server,
+    still running. That is the stale-read trap in `CLAUDE.md`; I noticed it
+    from the error ("to include 'Guest'") and reran properly.
+- **Two guests at one table, headless Chromium, 390×844 and 1920×1080**
+  (`/tmp/two11.mjs`), read from each page's DOM:
+  - both pages show two seats whose avatar letters differ and each equal
+    their animal's first letter;
+  - the plates start differently.
+  - I looked at the 390 screenshot (W and I avatars, "Womba…" and "Ibis
+    97").
+  - One 1920 run logged `ERR_CONNECTION_CLOSED`. Traced with
+    `requestfailed`, it was the Google Fonts stylesheet, an external blip in
+    1 of 3 runs; the other two were clean.
+- **Not verified:** production, a real phone, and a slide happening across
+  a real fortnight (the test moves the stored expiry instead).
+
+**Citation:** `bccbc3b`. Tests: "guest display names" (2, pure), "guest
+sessions slide" (5), test 35, test 5b extended.
+
+**Curated prompt:** "(1) Guest display names: pick from a short list of
+animal names plus two digits, like 'Wombat 27' … check at 390 px that two
+guests at one table are told apart, and that each avatar letter comes from
+the animal. (2) Guest sessions slide: … under 15 days left, extend it to 30
+days from now. Update ADR 0005's Consequences to match. Tests for both.
+Commit, log, stop."
