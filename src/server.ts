@@ -812,11 +812,15 @@ if (TEST_HOOKS_ENABLED) {
   app.post("/test-hooks/tables/:id/stacks", async (c) => {
     const tableId = tableIdParam(c);
     if (tableId === undefined) return c.notFound();
-    const body = (await c.req.json()) as Record<string, number>;
+    // JSON only (a cross-site form or text/plain POST can't set this type
+    // without a preflight), and every key must be a seated user.
+    if (!(c.req.header("content-type") ?? "").startsWith("application/json")) return c.json({ error: "JSON only." }, 415);
     try {
-      setStacksForTest(tableId, new Map(Object.entries(body).map(([userId, stack]) => [Number(userId), stack])));
+      const body = (await c.req.json()) as Record<string, unknown>;
+      const stacks = new Map(Object.entries(body).map(([userId, stack]) => [Number(userId), Number(stack)]));
+      setStacksForTest(tableId, stacks);
     } catch (err) {
-      return c.json({ error: pokerErrorMessage(err) }, 400);
+      return c.json({ error: err instanceof PokerError ? err.message : "Bad request." }, 400);
     }
     return c.json({ ok: true });
   });

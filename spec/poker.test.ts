@@ -1469,31 +1469,32 @@ describe.skipIf(!isLocal)("settling every hand, and busting out (writes test dat
 
   // Sets seated stacks directly, between hands. The route exists only when
   // the app runs with TEST_HOOKS=1 and NODE_ENV isn't production (see
-  // src/server.ts); the Docker image sets NODE_ENV=production, so in CI this
-  // reports false and the test that needs it skips itself.
-  async function setStacks(stacks: Record<number, number>): Promise<boolean> {
+  // src/server.ts); the Docker image sets NODE_ENV=production, so CI never
+  // has it. Set TEST_HOOKS=1 for `pnpm check` too (src/poker/live.ts): then a
+  // missing route is a failure, not a skip, so a run that meant to cover
+  // these tests can't pass by skipping them.
+  async function setStacks(stacks: Record<number, number>): Promise<void> {
     const res = await fetch(new URL(`/test-hooks/tables/${TABLE_ID}/stacks`, baseUrl), {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify(stacks),
     });
-    if (res.status === 404) return false;
-    if (!res.ok) throw new Error(`setStacks failed: ${res.status}`);
-    return true;
+    if (!res.ok) throw new Error(`setStacks failed: ${res.status} (is the app running with TEST_HOOKS=1?)`);
   }
+  const hooks = process.env.TEST_HOOKS === "1";
 
   async function resultsFor(cookie: string): Promise<{ userId: number; net: number; endedAt: string }[]> {
     const res = await fetch(new URL(`/tables/${TABLE_ID}/results`, baseUrl), { headers: { cookie } });
     return res.json();
   }
 
-  it("28. a hand that ends straight from the deal records results and stacks, and conserves chips", async (ctx) => {
+  it.skipIf(!hooks)("28. a hand that ends straight from the deal records results and stacks, and conserves chips", async () => {
     players = [await registerAndSit(), await registerAndSit()];
     const [alice, bob] = players;
     // Both blinds all in: 5 and 10 at blinds 5/10. Whichever seat is the
     // button posts the small blind heads-up, so give both seats a stack no
     // bigger than its blind either way round.
-    if (!(await setStacks({ [alice.userId]: 5, [bob.userId]: 5 }))) return ctx.skip();
+    await setStacks({ [alice.userId]: 5, [bob.userId]: 5 });
     const before = await getView(alice.cookie);
     const totalBefore = before.seats.reduce((sum, s) => sum + s.stack, 0);
     expect(totalBefore).toBe(10);
@@ -1553,7 +1554,9 @@ describe.skipIf(!isLocal)("settling every hand, and busting out (writes test dat
     const doc = new JSDOM(await res.text()).window.document;
     const notice = doc.querySelector(`.table-notice [data-out-of-chips="${loser.userId}"]`);
     expect(notice).not.toBeNull();
-    expect(doc.querySelector(".table-notice")!.textContent).toContain(`${loser.username} is out of chips.`);
+    // The owner's wording, with the name the table shows for that player.
+    const shownName = ended.notice!.players.find((p) => p.userId === loser.userId)!.displayName;
+    expect(notice!.textContent).toBe(`${shownName} is out of chips.`);
     // The winner holds everything: conservation across the bust.
     expect(ended.seats.find((s) => s.userId === winner.userId)!.stack).toBe(2 * ended.table.buy_in);
   });
@@ -1566,4 +1569,32 @@ describe.skipIf(!isLocal)("settling every hand, and busting out (writes test dat
     const view = (await res.json()) as TableView;
     expect(view.seats.find((s) => s.userId === loser.userId)!.stack).toBe(view.table.buy_in);
   });
+
+  it.skipIf(!hooks)("31. a seat already at 0 chips doesn't stop the next deal: it's stood up as out of chips", async () => {
+    players = [await registerAndSit(), await registerAndSit(), await registerAndSit()];
+    const [alice, bob, carol] = players;
+    // As a seat that busted before the rule shipped, or a crash between a
+    // hand's commit and its stand-ups, would leave it.
+    await setStacks({ [carol.userId]: 0 });
+    const dealt = await startHand(alice.cookie);
+    expect(dealt.hand!.winners).toBeNull(); // dealt, between the two with chips
+    expect(dealt.seats.map((s) => s.userId).sort()).toEqual([alice.userId, bob.userId].sort());
+    expect(dealt.notice?.players.find((p) => p.userId === carol.userId)?.reason).toBe("out_of_chips");
+  });
+
+  it(
+    "32. after a heads-up bust, a newcomer who sits in the pause doesn't get a hand dealt by itself",
+    { timeout: SHOWDOWN_PAUSE_MS + 15_000 },
+    async () => {
+      players = [await registerAndSit(), await registerAndSit()];
+      const { winner, ended } = await bustSomeone();
+      expect(ended.nextHandAt).toBeNull(); // one left: no deal coming
+      const newcomer = await registerAndSit();
+      players.push(newcomer);
+      await sleep(SHOWDOWN_PAUSE_MS + 1500);
+      const view = await getView(winner.cookie);
+      expect(view.hand!.handId).toBe(ended.hand!.handId); // nothing dealt
+      expect(view.nextHandAt).toBeNull();
+    },
+  );
 });

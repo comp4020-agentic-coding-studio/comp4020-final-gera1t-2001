@@ -66,12 +66,15 @@ export interface LastAction {
   at: string;
 }
 
-// Final brief Step 4: who was just stood up for being away, a one-shot hint
-// like lastAction so the page can say why a seat emptied. Cleared when the
-// next hand is dealt.
+// Final brief Step 4: who was just stood up, a one-shot hint like lastAction
+// so the page can say why a seat emptied. Cleared when the next hand is
+// dealt. Brief 2 step 10b added "out_of_chips"; one hand's end can stand up
+// both a ghost and a busted player, so the reason is per player. `type`
+// stays "stood_up" for both.
+export type StandUpReason = "away" | "out_of_chips";
 export interface TableNotice {
-  type: "left_away";
-  players: { userId: number; displayName: string }[];
+  type: "stood_up";
+  players: { userId: number; displayName: string; reason: StandUpReason }[];
   at: string;
 }
 
@@ -304,30 +307,38 @@ function seatsToStandUp(tableId: number, now = Date.now()): number[] {
 
 // Stands up each user through leave(), so the chip rule (the stack goes with
 // the seat row) and the notification are the same as any other leave, and
-// records who went for the view's notice. Only ever called with no hand in
-// progress.
-function standUpAway(tableId: number, userIds: number[]): void {
+// records who went, and why, for the view's notice. Only ever called with no
+// hand in progress. With `addToNotice`, adds to the notice instead of
+// replacing it: afterHandEnded stands up busters and ghosts in two calls for
+// one event, and both belong in one notice. Any later stand-up (the presence
+// timer, minutes on) starts a fresh notice, so old names don't pile up.
+function standUp(tableId: number, userIds: number[], reason: StandUpReason, addToNotice = false): void {
   const gone: TableNotice["players"] = [];
   for (const userId of userIds) {
     try {
       const timeouts = timeoutsInARow.get(tableId)?.get(userId) ?? 0;
       leave(tableId, userId);
-      gone.push({ userId, displayName: displayNameFor(userId) });
+      gone.push({ userId, displayName: displayNameFor(userId), reason });
       logEvent("stood_up", {
         table: tableId,
         user: userId,
         name: displayNameFor(userId),
-        reason: timeouts >= AWAY_STAND_TIMEOUTS ? "timeouts" : "away",
+        reason: reason === "out_of_chips" ? reason : timeouts >= AWAY_STAND_TIMEOUTS ? "timeouts" : "away",
         timeouts_in_a_row: timeouts,
       });
     } catch (err) {
       // Already gone, or a hand is somehow still running: try the next seat.
-      console.error(`poker: couldn't stand up away user ${userId} at table ${tableId}`, err);
+      console.error(`poker: couldn't stand up user ${userId} at table ${tableId}`, err);
     }
   }
   if (gone.length === 0) return;
-  noticeByTable.set(tableId, { type: "left_away", players: gone, at: new Date().toISOString() });
+  const earlier = addToNotice ? (noticeByTable.get(tableId)?.players ?? []) : [];
+  noticeByTable.set(tableId, { type: "stood_up", players: [...earlier, ...gone], at: new Date().toISOString() });
   notifyTable(tableId);
+}
+
+function standUpAway(tableId: number, userIds: number[]): void {
+  standUp(tableId, userIds, "away");
 }
 
 function handInProgress(tableId: number): boolean {
@@ -381,25 +392,44 @@ function runPresenceCheck(tableId: number): void {
   schedulePresenceCheck(tableId);
 }
 
-// If the player to act has gone away mid-turn, bring their deadline in to
-// min(current, now + AWAY_TURN_SECONDS). Guarded on version so it can't land
-// on a turn that moved on, but leaves version as it is: only the deadline
-// changes, so an action already validated against this version is still
-// valid, and nothing a client compares version for has changed. The turn
-// timer stays the only thing that acts.
+// The turn's real deadline, as of `now`: the stored one, or, if the player
+// to act has gone away mid-turn, AWAY_TURN_SECONDS from the moment they went
+// away, whichever is sooner. A pure function of the row and presence, so it
+// doesn't depend on any timer firing on time. Before the ghost-seat flake
+// fix (process log, 4 Nov) only pullInDeadlineIfAway's timer moved the
+// deadline, and only from when it ran: an event loop busy for a few hundred
+// ms (scrypt on a register, a parallel test file) left a window where a view
+// said `away: true` beside the full TURN_TIMEOUT_SECONDS deadline. The view,
+// the turn ring and the turn timer all read this instead.
+function effectiveDeadline(tableId: number, row: TableStateRow, now = Date.now()): number | null {
+  if (!row.turn_deadline) return null;
+  const stored = new Date(row.turn_deadline).getTime();
+  const state = restoreEngine(row).state;
+  if (state.winners !== null || state.actionTo === null) return stored;
+  const player = state.players[state.actionTo];
+  if (!player) return stored;
+  const since = awaySince(tableId, Number(player.id));
+  if (since === undefined || since > now) return stored;
+  // Away since before this turn began counts from the turn's start instead
+  // (computeTurnDeadline already gave it the short turn then).
+  const turnStart = new Date(row.updated_at).getTime();
+  return Math.min(stored, Math.max(since, turnStart) + AWAY_TURN_SECONDS * 1000);
+}
+
+// Writes effectiveDeadline back to the row once the player to act has gone
+// away, so what's stored matches what every view already shows. Guarded on
+// version so it can't land on a turn that moved on, but leaves version as it
+// is: only the deadline changes, so an action already validated against this
+// version is still valid, and nothing a client compares version for has
+// changed. The turn timer stays the only thing that acts.
 function pullInDeadlineIfAway(tableId: number, now: number): void {
   const row = getTableState(tableId);
   if (!row || !row.turn_deadline) return;
-  const state = restoreEngine(row).state;
-  if (state.winners !== null || state.actionTo === null) return;
-  const player = state.players[state.actionTo];
-  if (!player || !isAway(tableId, Number(player.id), now)) return;
-
-  const awayDeadline = now + AWAY_TURN_SECONDS * 1000;
-  if (new Date(row.turn_deadline).getTime() <= awayDeadline) return;
+  const effective = effectiveDeadline(tableId, row, now);
+  if (effective === null || effective >= new Date(row.turn_deadline).getTime()) return;
   const result = db
     .prepare("UPDATE table_state SET turn_deadline = ? WHERE table_id = ? AND version = ?")
-    .run(new Date(awayDeadline).toISOString(), tableId, row.version);
+    .run(new Date(effective).toISOString(), tableId, row.version);
   if (result.changes !== 1) return;
   scheduleTimeoutFor(tableId);
   notifyTable(tableId);
@@ -478,13 +508,14 @@ export function buildView(tableId: number, viewerUserId: number | undefined): Ta
   const hand = stateRow
     ? restoreEngine(stateRow).view(viewerUserId !== undefined ? String(viewerUserId) : undefined)
     : null;
+  const deadline = stateRow ? effectiveDeadline(tableId, stateRow) : null;
 
   return {
     table,
     seats,
     hand,
-    turnDeadline: stateRow?.turn_deadline ?? null,
-    turnSeconds: stateRow ? turnSeconds(stateRow) : null,
+    turnDeadline: deadline !== null ? new Date(deadline).toISOString() : null,
+    turnSeconds: stateRow && deadline !== null ? turnSeconds(stateRow, deadline) : null,
     nextHandAt: nextHandAt(tableId),
     version: stateRow?.version ?? 0,
     seq,
@@ -497,13 +528,12 @@ export function buildView(tableId: number, viewerUserId: number | undefined): Ta
 }
 
 // Every write that starts a turn sets turn_deadline and updated_at together,
-// so the turn's length is their difference. Pulling an away player's deadline
-// in (pullInDeadlineIfAway) moves only turn_deadline, which makes this turn
+// so the turn's length is the deadline minus updated_at. An away player's
+// deadline (effectiveDeadline) moves only the deadline, which makes this turn
 // shorter from when it started: the ring keeps going down, it doesn't refill.
 // Read from the row rather than kept in memory, so it survives a restart.
-function turnSeconds(row: TableStateRow): number | null {
-  if (!row.turn_deadline) return null;
-  const ms = new Date(row.turn_deadline).getTime() - new Date(row.updated_at).getTime();
+function turnSeconds(row: TableStateRow, deadline: number): number {
+  const ms = deadline - new Date(row.updated_at).getTime();
   return Math.max(1, Math.round(ms / 1000));
 }
 
@@ -605,12 +635,83 @@ export function leave(tableId: number, userId: number): void {
 export function setStacksForTest(tableId: number, stacks: Map<number, number>): void {
   requireTable(tableId);
   if (handInProgress(tableId)) throw new PokerError("A hand is in progress.");
+  const seated = new Set(getSeats(tableId).map((s) => s.user_id));
   for (const [userId, stack] of stacks) {
+    if (!seated.has(userId)) throw new PokerError(`User ${userId} isn't seated.`);
     if (!Number.isInteger(stack) || stack < 0) throw new PokerError("Stacks are whole numbers, 0 or more.");
+  }
+  for (const [userId, stack] of stacks) {
     db.prepare("UPDATE seats SET stack = ? WHERE table_id = ? AND user_id = ?").run(stack, tableId, userId);
   }
   logEvent("test_hook_stacks", { table: tableId, users: [...stacks.keys()].join(",") });
   notifyTable(tableId);
+}
+
+// --- Settling a finished hand --------------------------------------------
+//
+// Brief 2 step 10b: one path for every way a hand ends. A hand usually ends
+// on an action (commitPreparedAction), but it can also end inside deal(),
+// when the blinds put every player all in (the engine runs it out and
+// settles at once: dist/rules/showdown.js shouldShowdown, reached from
+// game-reducer.js's settle loop after DEAL). startHand used to write only
+// the snapshot for that, so the stacks and hand_results never moved.
+
+// Writes the finished hand's stacks and hand_results rows. Called inside the
+// caller's transaction, after its table_state write, so a hand's end is one
+// atomic change. One timestamp for the whole hand, so its rows share an
+// ended_at and /results can group them back into a hand (hand_results has no
+// hand id). SQLite's 'now' is only fixed within one statement, and this is
+// one INSERT per player.
+function writeHandSettlement(tableId: number, state: PokerEngine["state"], stacksBeforeHand: Map<string, number>): void {
+  const endedAt = new Date().toISOString();
+  for (const player of state.players) {
+    if (!player) continue;
+    const userId = Number(player.id);
+    const before = stacksBeforeHand.get(player.id) ?? player.stack;
+    db.prepare("UPDATE seats SET stack = ? WHERE table_id = ? AND user_id = ?").run(player.stack, tableId, userId);
+    db.prepare("INSERT INTO hand_results (table_id, user_id, net, ended_at) VALUES (?, ?, ?, ?)").run(
+      tableId,
+      userId,
+      player.stack - before,
+      endedAt,
+    );
+  }
+}
+
+// After the settlement has committed: stand up ghosts (AWAY_STAND_TIMEOUTS
+// timeouts in a row, or away more than AWAY_STAND_MS), then anyone left with
+// 0 chips (owner decision, 4 Nov: "<name> is out of chips"; the engine won't
+// seat a 0 stack, validation.js validateSitAction, so they couldn't be dealt
+// in anyway, and sitting again gives the fixed buy-in through sitDown), then
+// arm the auto-deal (brief 2 Step 10) for whoever is left. Never mid-hand.
+// The stand-ups broadcast on their own; the caller broadcasts after this.
+function afterHandEnded(tableId: number): void {
+  // Busters first: a ghost who also lost everything is out of chips, which
+  // is the owner's notice for 0 chips at hand end.
+  standUpBusted(tableId);
+  standUp(tableId, seatsToStandUp(tableId), "away", true);
+  // Only if two are still present: a heads-up bust leaves one, and leave()'s
+  // rule is that a pause left with fewer than two is over for good (a
+  // newcomer sitting down in it doesn't revive it).
+  if (presentSeatCount(tableId) >= 2) scheduleAutoDeal(tableId);
+  else cancelAutoDeal(tableId);
+}
+
+// Anyone seated at 0 chips. Called at every hand end, and by startHand
+// before it deals, which catches a 0 seat from any other route (a seat that
+// busted before this rule shipped, a crash between a hand's commit and
+// afterHandEnded, the test hook): the engine refuses to seat a 0 stack
+// (validation.js validateSitAction), so one 0 seat would otherwise fail
+// every deal.
+function standUpBusted(tableId: number): void {
+  standUp(
+    tableId,
+    getSeats(tableId)
+      .filter((s) => s.stack === 0)
+      .map((s) => s.user_id),
+    "out_of_chips",
+    true,
+  );
 }
 
 // --- Turn deadline persistence -----------------------------------------
@@ -688,6 +789,9 @@ export function startHand(tableId: number, by: "manual" | "auto" = "manual"): vo
       throw new PokerError("A hand is already in progress.");
     }
   }
+  // A 0 seat can't be dealt in; see standUpBusted.
+  noticeByTable.delete(tableId); // this deal's stand-ups make the new notice
+  standUpBusted(tableId);
 
   // Final brief Step 4: deal in present players only. On a manual deal, anyone
   // away is stood up first; if that leaves fewer than two, those stand-ups
@@ -697,11 +801,13 @@ export function startHand(tableId: number, by: "manual" | "auto" = "manual"): vo
   // any hand ends, for a phone that locked near its end. runAutoDeal only
   // calls this with two present players; away ones sit the hand out.
   if (by === "manual") {
-    standUpAway(
+    standUp(
       tableId,
       getSeats(tableId)
         .filter((s) => isAway(tableId, s.user_id))
         .map((s) => s.user_id),
+      "away",
+      true,
     );
   }
   const seats = getSeats(tableId).filter((s) => by === "manual" || !isAway(tableId, s.user_id));
@@ -719,9 +825,15 @@ export function startHand(tableId: number, by: "manual" | "auto" = "manual"): vo
     engine.sit(seat.seat_no, String(seat.user_id), displayNameFor(seat.user_id), seat.stack);
   }
   engine.deal();
+  // Both blinds all in ends the hand here, before anyone acts (see
+  // writeHandSettlement). Tabled the same way as any showdown.
+  const endedAtDeal = engine.state.winners !== null;
+  if (endedAtDeal) tableShowdownHands(engine);
+  const stacksBeforeHand = new Map(seats.map((s) => [String(s.user_id), s.stack]));
 
   db.transaction(() => {
     writeFreshTableState(tableId, engine, existing?.version ?? 0);
+    if (endedAtDeal) writeHandSettlement(tableId, engine.state, stacksBeforeHand);
   })();
   cancelAutoDeal(tableId); // a new hand is on the felt; any pending deal is moot
   logEvent("hand_start", {
@@ -730,10 +842,14 @@ export function startHand(tableId: number, by: "manual" | "auto" = "manual"): vo
     players: seats.length,
     to_act: engine.state.actionTo,
     by,
+    ended_at_deal: endedAtDeal,
   });
   lastActionByTable.delete(tableId); // a fresh hand has no "last action" yet
-  noticeByTable.delete(tableId);
+  // The notice stays only if this deal stood someone up (busted, or away on a
+  // manual deal): it says why their seat just emptied. Otherwise the new hand
+  // clears the last one, as before.
   scheduleTimeoutFor(tableId);
+  if (endedAtDeal) afterHandEnded(tableId);
   notifyTable(tableId);
   schedulePresenceCheck(tableId);
 }
@@ -908,34 +1024,11 @@ export function commitPreparedAction(prepared: PreparedAction): void {
     if (!writeTableStateIfVersionMatches(tableId, engine, previousVersion)) {
       return false;
     }
-    if (handEnded) {
-      // Same transaction as the table_state write above, per the owner's
-      // note: a hand ending is one atomic change to the database, not
-      // three separate ones that could land only partially if the process
-      // died in between — and now also gated on the same version check.
-      // One timestamp for the whole hand, so its rows share an ended_at and
-      // /results can group them back into a hand (hand_results has no hand
-      // id). SQLite's 'now' is only fixed within one statement, and this is
-      // one INSERT per player.
-      const endedAt = new Date().toISOString();
-      for (const player of newState.players) {
-        if (!player) continue;
-        const userId = Number(player.id);
-        const before = stacksBeforeHand.get(player.id) ?? player.stack;
-        const net = player.stack - before;
-        db.prepare("UPDATE seats SET stack = ? WHERE table_id = ? AND user_id = ?").run(
-          player.stack,
-          tableId,
-          userId,
-        );
-        db.prepare("INSERT INTO hand_results (table_id, user_id, net, ended_at) VALUES (?, ?, ?, ?)").run(
-          tableId,
-          userId,
-          net,
-          endedAt,
-        );
-      }
-    }
+    // Same transaction as the table_state write above, per the owner's note:
+    // a hand ending is one atomic change to the database, not three separate
+    // ones that could land only partially if the process died in between —
+    // and gated on the same version check.
+    if (handEnded) writeHandSettlement(tableId, newState, stacksBeforeHand);
     return true;
   })();
 
@@ -979,16 +1072,9 @@ export function commitPreparedAction(prepared: PreparedAction): void {
   }
   counts.set(actingUserId, auto ? (counts.get(actingUserId) ?? 0) + 1 : 0);
 
-  // A hand that just ended stands up its ghosts: AWAY_STAND_TIMEOUTS
-  // timeouts in a row, or away more than AWAY_STAND_MS. Never mid-hand.
-  // Before the broadcast, with the auto-deal (brief 2 Step 10) armed after
-  // them, so the view every page gets for the finished hand already carries
-  // the right nextHandAt and the right seats. standUpAway broadcasts on its
-  // own when it stands anyone up; the second broadcast just repeats it.
-  if (handEnded) {
-    standUpAway(tableId, seatsToStandUp(tableId));
-    scheduleAutoDeal(tableId);
-  }
+  // Before the broadcast, so the view every page gets for the finished hand
+  // already has the right seats and nextHandAt.
+  if (handEnded) afterHandEnded(tableId);
 
   notifyTable(tableId);
   if (handEnded) schedulePresenceCheck(tableId);
@@ -1033,7 +1119,7 @@ export function scheduleTimeoutFor(tableId: number): void {
   const row = getTableState(tableId);
   if (!row || !row.turn_deadline) return;
 
-  const delay = new Date(row.turn_deadline).getTime() - Date.now();
+  const delay = effectiveDeadline(tableId, row)! - Date.now();
   if (delay <= 0) {
     runTimeout(tableId);
     return;
@@ -1053,7 +1139,7 @@ function runTimeout(tableId: number): void {
   // ever acting twice or for the wrong player.
   const row = getTableState(tableId);
   if (!row || !row.turn_deadline) return;
-  if (new Date(row.turn_deadline).getTime() > Date.now()) {
+  if (effectiveDeadline(tableId, row)! > Date.now()) {
     scheduleTimeoutFor(tableId); // something moved the deadline later; re-arm for it
     return;
   }

@@ -9,6 +9,11 @@
 //
 // e.g. `SHOWDOWN_PAUSE_MS=2000 node src/server.ts` in one shell and
 // `SHOWDOWN_PAUSE_MS=2000 pnpm check` in the other. CI sets none of them.
+//
+// Not a timing but set the same way: TEST_HOOKS=1 (brief 2 step 10b) mounts
+// the /test-hooks routes (src/server.ts; never with NODE_ENV=production, so
+// never in the Docker image) and tells the spec they must be there. Without
+// it, the tests that need them skip, and vitest's summary counts them.
 
 // GET /tables/:id/events sends a named "ping" event this often, pushes or
 // not, so a client can tell a quiet table from a dead stream.

@@ -455,9 +455,18 @@ function mineHtml(view) {
 
 /** @param {TableView} view */
 function noticeHtml(view) {
-  if (view.notice?.type !== "left_away") return "";
-  const names = view.notice.players.map((p) => p.displayName).join(", ");
-  return `<p class="table-notice">${escapeHtml(names)} left the table (away).</p>`;
+  if (view.notice?.type !== "stood_up") return "";
+  const players = view.notice.players;
+  const away = players.filter((p) => p.reason === "away").map((p) => p.displayName);
+  const broke = players.filter((p) => p.reason === "out_of_chips");
+  /** @type {string[]} */
+  const lines = [];
+  if (away.length) lines.push(`${escapeHtml(away.join(", "))} left the table (away).`);
+  // Brief 2 step 10b (owner wording): "<name> is out of chips."
+  for (const p of broke) {
+    lines.push(`<span data-out-of-chips="${p.userId}">${escapeHtml(p.displayName)} is out of chips.</span>`);
+  }
+  return lines.length ? `<p class="table-notice">${lines.join(" ")}</p>` : "";
 }
 
 // The whole of #table-root: the table, then the dock.
