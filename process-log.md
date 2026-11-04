@@ -2341,7 +2341,7 @@ red → green.
 **Curated prompt:** "Read CLAUDE.md, then docs/final-brief-2.md. Commit the
 brief first, then do Step 10 only and stop."
 
-## 2026-11-04 10:58 — [harness]
+## 2026-11-04 11:20 — [harness]
 
 **What happened:** The owner asked for one small step before Step 11, red
 first: settle a hand that ends at the deal, stand up a player with 0 chips
@@ -2382,3 +2382,94 @@ other … (2) Owner decision: a player with 0 chips at hand end is stood up
 automatically, with a notice "<name> is out of chips" … (3) Find the root
 cause of the flaky ghost-seat test and fix it; show it passing 20 full runs
 in a row. Commit, log, and stop."
+
+## 2026-11-04 13:03 — [judgement]
+
+**What happened:** The fix for the small step before Step 11: a hand that
+ends at the deal settles like any other, a player at 0 chips is stood up
+("<name> is out of chips"), and the root cause of the flaky ghost-seat
+test is found and fixed.
+
+**What I did instead of the obvious thing:**
+- **Flake root cause, proven before fixing.** The obvious move was a wider
+  margin in ghost test 3. Instead I tested a hypothesis first:
+  - `buildView` computed `away` from `Date.now()`, but the turn deadline
+    moved to `AWAY_TURN_SECONDS` only when `pullInDeadlineIfAway`'s
+    `setTimeout` fired.
+  - `scryptSync` on every register (`src/crypto.ts`) and parallel test
+    files block the event loop, so that timer can run late. A view in the
+    gap says `away: true` beside the full deadline.
+  - An 800 ms delay injected into that timer (scratch edit, never
+    committed) reproduced it 3/3: "expected 4968–4974 to be ≤ 4000",
+    against the original "4964".
+  - It was a product bug too: a page could show "Away" beside a full turn
+    ring.
+- **The flake fix: no timing changes.** `effectiveDeadline()` is a pure
+  function: the stored deadline, or `max(awaySince, turnStart) +
+  AWAY_TURN_SECONDS` once the actor is away. `buildView`, `turnSeconds`,
+  `scheduleTimeoutFor`, `runTimeout` and `pullInDeadlineIfAway` all read
+  it. With the same 800 ms lag, test 3 passed 3/3.
+- **One settle path, not a copy.** `writeHandSettlement` and
+  `afterHandEnded` are shared by `commitPreparedAction` and `startHand`'s
+  new at-deal branch.
+  - That matters because test 28 needs the test hook and so can't run in
+    CI. The at-deal branch's only new code is the call into the shared
+    path, which CI covers through tests 3, 6 and 17.
+- **The Opus review found 1 bug and 3 should-fixes in my first fix.**
+  - Confirmed by two new tests, red on that fix and green now:
+    - 31: a seat already at 0 failed every deal ("start failed: Something
+      went wrong."; the engine refuses a 0 stack, `validation.js:193`).
+    - 32: after a heads-up bust, a newcomer got a hand dealt without
+      pressing Deal.
+  - Also fixed:
+    - busters are stood up before ghosts, so a busted ghost reads "out
+      of chips";
+    - notices no longer pile up across separate stand-ups;
+    - the hook takes JSON only and refuses unseated users;
+    - test 29 builds the expected name from the notice. Proved by
+      rendering a wrong name, which turned it red.
+    - test 28 now fails, rather than skips, when `TEST_HOOKS=1` is set and
+      the hook is missing. CI also runs on localhost, so "fail if local"
+      would have broken CI. `TEST_HOOKS` is documented with the other
+      overrides in `src/poker/live.ts`.
+  - Not acted on: the turn ring can briefly refill if the presence timer
+    is late and the player reconnects before it fires. It's the same rare
+    window, and the reviewer judged it acceptable.
+- **The busted-ghost reorder isn't shown going red to green.** A scratch
+  run against the real `table.ts` (`/tmp/s10c/ghostbust.ts`) gives a
+  busted ghost "out_of_chips". The previous fix did too in my runs: one
+  hand never reaches 5 timeouts or 5 minutes away, so the ghost was never
+  due for an away stand-up. The reorder rests on reading the code.
+
+**How I knew it was right:**
+- **20 full `pnpm check` runs in a row on the final code:** 60/60 each, run
+  with `TEST_HOOKS=1`, so tests 28 and 31 ran rather than skipped.
+  Checksums of the five changed files matched before and after the loop
+  (`/tmp/s10/run20b.log`).
+  - An earlier set of 20, also all green (58/58), was on code the review
+    then changed, so it isn't counted.
+- **CI-shaped run** (default timings, no `TEST_HOOKS`, fresh DB): 58
+  passed, 2 skipped (28 and 31), the skips visible in vitest's summary.
+- **Deliberate breaks, each restored and `cmp`'d:**
+  - no settlement at the deal → only 28 red;
+  - no bust stand-up → 29 and 30 red.
+- **Production gate:** a server with `NODE_ENV=production TEST_HOOKS=1`
+  answered the hook with 404 and printed no "test hooks are ON". The dev
+  server with the hook answered 200.
+- **Two Playwright contexts at 1920×1080 and 390×844:**
+  - after all-ins, both pages read "<name> is out of chips." and the
+    busted player is no longer seated;
+  - sitting again shows 1,000;
+  - no overflow, no console errors. I looked at the screenshots.
+- **Not verified:** production, a real phone, and any 0-stack seats
+  already on production (a deal now stands them up on the first deploy).
+
+**Citation:** `c665585` (red) → `3311c54` (green): tests 28, 29, 30 red →
+green; 31, 32 red on the first fix → green; ghost-seat test 3 red 3/3 →
+green 3/3 under an injected 800 ms timer lag.
+
+**Curated prompt:** "Before Step 11, one small step, red first. (1) A hand
+that ends straight from the deal must record results and stacks like any
+other … (2) Owner decision: a player with 0 chips at hand end is stood up
+automatically … (3) Find the root cause of the flaky ghost-seat test and
+fix it; show it passing 20 full runs in a row. Commit, log, and stop."
