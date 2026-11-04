@@ -2626,7 +2626,7 @@ cross-site POST to /guest or /logout…" red → green.
 **Curated prompt:** "Read CLAUDE.md, then docs/final-brief-2.md. Step 10
 and its follow-ups are done. Do Step 11 only and stop."
 
-## 2026-11-04 22:56 — [judgement]
+## 2026-11-04 22:47 — [judgement]
 
 **What happened:** Two owner decisions on Step 11. (1) Guest display names
 are an animal plus two digits ("Wombat 27"), with each avatar letter coming
