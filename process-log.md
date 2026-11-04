@@ -2383,7 +2383,7 @@ automatically, with a notice "<name> is out of chips" … (3) Find the root
 cause of the flaky ghost-seat test and fix it; show it passing 20 full runs
 in a row. Commit, log, and stop."
 
-## 2026-11-04 13:03 — [judgement]
+## 2026-11-04 13:01 — [judgement]
 
 **What happened:** The fix for the small step before Step 11: a hand that
 ends at the deal settles like any other, a player at 0 chips is stood up
