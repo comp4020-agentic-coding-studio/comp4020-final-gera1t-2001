@@ -4,6 +4,8 @@ import { describe, expect, inject, it } from "vitest";
 
 import { GUEST_LIMIT, GUEST_LIMIT_WINDOW_MS, MESSAGES, PASSWORD_RULES } from "../src/account-messages.ts";
 import { limitKey } from "../src/guest-limit.ts";
+import { GUEST_ANIMALS, avatarLetter, guestDisplayName } from "../src/guest-names.ts";
+import { GUEST_SESSION_SLIDE_BELOW_MS, SESSION_LIFETIME_MS } from "../src/sessions.ts";
 import { placeholderQuestionsForUsername } from "../src/security-questions.ts";
 
 // These tests register real accounts against the running app, so they must
@@ -435,7 +437,30 @@ async function claim(cookie: string, fields: Record<string, string>): Promise<Re
   return fetch(new URL("/profile/claim", baseUrl), { method: "POST", body, headers: { cookie }, redirect: "manual" });
 }
 
-// Pure, so it runs everywhere, CI included.
+// Pure, so these run everywhere, CI included.
+describe("guest display names (owner decision: an animal and two digits)", () => {
+  it("every animal has its own avatar letter, and fits a phone's seat plate", () => {
+    const letters = GUEST_ANIMALS.map(avatarLetter);
+    expect(new Set(letters).size).toBe(GUEST_ANIMALS.length);
+    for (const a of GUEST_ANIMALS) expect(a.length).toBeLessThanOrEqual(6);
+  });
+
+  it("picks an animal whose letter isn't taken while one is free, and digits 00-99", () => {
+    // Every letter but Wombat's taken: Wombat is the only choice, whatever
+    // the random picks are.
+    const taken = new Set(GUEST_ANIMALS.map(avatarLetter).filter((l) => l !== "W"));
+    for (const pick of [0, 7, 99]) {
+      const name = guestDisplayName(taken, (n) => Math.min(pick, n - 1));
+      expect(name.split(" ")[0]).toBe("Wombat");
+      expect(Number(name.split(" ")[1])).toBe(Math.min(pick, 99));
+    }
+    expect(guestDisplayName(new Set(), () => 3)).toBe(`${GUEST_ANIMALS[3]} 03`);
+    // All taken: still a name, from the whole list.
+    const all = new Set(GUEST_ANIMALS.map(avatarLetter));
+    expect(GUEST_ANIMALS).toContain(guestDisplayName(all, () => 0).split(" ")[0]);
+  });
+});
+
 describe("the guest rate limit's key", () => {
   it("is the address for IPv4 (plain or IPv4-mapped) and the /64 for IPv6", () => {
     expect(limitKey("::ffff:203.0.113.7")).toBe(limitKey("203.0.113.7"));
@@ -508,7 +533,10 @@ describe.skipIf(!isLocal)("guests (writes test data — local only)", () => {
     const b = await guestIdentity((await postGuest()).cookie!);
     for (const g of [a, b]) {
       expect(g.username).toMatch(/^guest-[a-z2-7]{6}$/);
-      expect(g.displayName).toMatch(/^Guest \d{4}$/);
+      // An animal from the list, then two digits.
+      const [animal, digits] = g.displayName.split(" ");
+      expect(GUEST_ANIMALS).toContain(animal);
+      expect(digits).toMatch(/^\d{2}$/);
     }
     expect(a.username).not.toBe(b.username);
     expect(a.displayName).not.toBe(b.displayName);
@@ -676,5 +704,89 @@ describe.skipIf(!isLocal)("guests (writes test data — local only)", () => {
     for (let i = 0; i < 6; i++) expect(await reset(username)).toEqual(unknown);
     // And the guest's own session is untouched.
     expect((await guestIdentity(cookie!)).username).toBe(username);
+  });
+});
+
+// Owner decision (4 Nov 2026, after Step 11): a guest session with under
+// GUEST_SESSION_SLIDE_BELOW_MS left is extended, on any request, to
+// SESSION_LIFETIME_MS from now. The test-only session hook (src/server.ts;
+// TEST_HOOKS=1, never in production) moves a session's expiry, which is the
+// only way to reach day 15 inside a test.
+describe.skipIf(!isLocal || process.env.TEST_HOOKS !== "1")("guest sessions slide (needs TEST_HOOKS=1)", () => {
+  const DAY = 24 * 60 * 60 * 1000;
+
+  async function expiry(cookie: string, set?: Date): Promise<number> {
+    const res = await fetch(new URL("/test-hooks/session", baseUrl), {
+      method: "POST",
+      headers: { "content-type": "application/json", cookie },
+      body: JSON.stringify(set ? { expiresAt: set.toISOString() } : {}),
+    });
+    if (!res.ok) throw new Error(`session hook failed: ${res.status} (is the app running with TEST_HOOKS=1?)`);
+    return new Date(((await res.json()) as { expiresAt: string }).expiresAt).getTime();
+  }
+
+  // Any ordinary request; the slide happens before the route runs.
+  async function visit(cookie: string): Promise<Response> {
+    return fetch(new URL("/", baseUrl), { headers: { cookie } });
+  }
+
+  const cookieExpiry = (res: Response): number | undefined => {
+    const c = res.headers.getSetCookie().find((h) => h.startsWith("session="));
+    return c ? new Date(/expires=([^;]+)/i.exec(c)![1]).getTime() : undefined;
+  };
+
+  it("a guest session with under 15 days left is extended to 30 days from now, in the database and the cookie", async () => {
+    const { cookie } = await postGuest();
+    await expiry(cookie!, new Date(Date.now() + GUEST_SESSION_SLIDE_BELOW_MS - DAY)); // 14 days left
+    const res = await visit(cookie!);
+    const after = await expiry(cookie!);
+    expect((after - Date.now()) / DAY).toBeCloseTo(SESSION_LIFETIME_MS / DAY, 1);
+    // The browser is told too, with the same token: the cookie's own expiry
+    // moves, to within a second of the stored one (cookies carry seconds).
+    const sent = res.headers.getSetCookie().find((h) => h.startsWith("session="))!;
+    expect(sent.split(";")[0]).toBe(cookie);
+    expect(Math.abs(cookieExpiry(res)! - after)).toBeLessThan(1000);
+    // Still the same guest.
+    expect((await guestIdentity(cookie!)).username).toMatch(/^guest-/);
+  });
+
+  it("with 15 days or more left nothing moves, and no cookie is sent", async () => {
+    const { cookie } = await postGuest();
+    const set = new Date(Date.now() + GUEST_SESSION_SLIDE_BELOW_MS + DAY); // 16 days left
+    await expiry(cookie!, set);
+    const res = await visit(cookie!);
+    expect(cookieExpiry(res)).toBeUndefined();
+    expect(await expiry(cookie!)).toBe(set.getTime());
+  });
+
+  it("a registered account's session doesn't slide", async () => {
+    const { sessionCookie } = await register();
+    const set = new Date(Date.now() + DAY); // 1 day left
+    await expiry(sessionCookie!, set);
+    const res = await visit(sessionCookie!);
+    expect(cookieExpiry(res)).toBeUndefined();
+    expect(await expiry(sessionCookie!)).toBe(set.getTime());
+  });
+
+  it("an expired guest session isn't brought back", async () => {
+    const { cookie } = await postGuest();
+    const set = new Date(Date.now() - 1000);
+    await expiry(cookie!, set);
+    const res = await visit(cookie!);
+    expect(cookieExpiry(res)).toBeUndefined();
+    expect(await expiry(cookie!)).toBe(set.getTime());
+    const profile = await fetch(new URL("/profile", baseUrl), { headers: { cookie: cookie! }, redirect: "manual" });
+    expect(profile.status).toBe(303); // signed out
+  });
+
+  it("a claimed account's session stops sliding", async () => {
+    const { cookie } = await postGuest();
+    const claimed = await claim(cookie!, { username: `claim_${randomBytes(5).toString("hex")}` });
+    expect(claimed.status).toBe(303);
+    const newCookie = sessionCookieFrom(claimed)!;
+    const set = new Date(Date.now() + DAY);
+    await expiry(newCookie, set);
+    await visit(newCookie);
+    expect(await expiry(newCookie)).toBe(set.getTime());
   });
 });

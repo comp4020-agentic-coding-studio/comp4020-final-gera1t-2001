@@ -82,7 +82,7 @@ function signed(n: number): string {
 }
 
 // Brief 2 Step 11: an unclaimed guest's name carries a small tag, so a
-// ledger of "Guest 0412"s reads as guests, not as regulars who chose that.
+// ledger of "Wombat 27"s reads as guests, not as regulars who chose that.
 function playerName(p: { displayName: string; isGuest: number }): string {
   return `${escapeHtml(p.displayName)}${p.isGuest ? ` <span class="tag" data-guest>guest</span>` : ""}`;
 }

@@ -30,9 +30,16 @@ Step 11:
 
 - **Play as a guest** on `/login` and `/register` (`POST /guest`) makes a
   signed-in account in one tap: username `guest-` plus 6 random lowercase
-  base32 characters, display name "Guest " plus 4 digits, a password hash of 32 random
-  bytes nobody knows, no security questions, `users.is_guest = 1`
-  (migration 0006). The session lasts 30 days.
+  base32 characters, a password hash of 32 random bytes nobody knows, no
+  security questions, `users.is_guest = 1` (migration 0006). The session
+  lasts 30 days, and slides (below).
+- The display name is an animal and two digits, like "Wombat 27" (owner
+  decision, 4 Nov 2026, after Step 11; it was "Guest 4821"). Each of the 24
+  animals starts with a different letter, and a new guest gets one whose
+  letter no seated player's avatar already shows, so guests at one table
+  are told apart by the avatar as well as the name.
+- A guest session slides (owner decision, same day): on any request, a
+  guest session with under 15 days left is extended to 30 days from now.
 - At most 10 guests per IP per hour (an IPv6 address counts by its /64),
   counted in memory.
 - Form POSTs that a browser marks as cross-site (`Sec-Fetch-Site`) are
@@ -79,12 +86,31 @@ What B costs, against what it buys:
   password hash has no password behind it, there are no questions, and
   recovery for a guest username behaves like an unknown username on purpose,
   so it reveals nothing. Only someone with access to the database could
-  bring it back, by hand.
-- **The session ends at 30 days, used or not.** A session's expiry is set
-  when it is made and never extended, for everyone. For a registered player
-  that means logging in again; for a guest it is the same permanent loss. The warning page and the header's Claim account
+  bring it back, by hand. The warning page and the header's Claim account
   link are the only protection. In return, the C8 rule is untouched for
   everyone who claims or registers.
+- **A guest's session ends only after 15 to 30 days without a visit.** Any
+  request with under 15 days left on a guest session extends it to 30 days
+  from now (`slideGuestSession` in `src/sessions.ts`, one `UPDATE` that
+  checks and writes together), and the browser gets the cookie again with
+  the new expiry. So a guest who plays at least once a fortnight never loses
+  the account to the clock; one who stays away longer than that loses it
+  somewhere between day 15 and day 30 after their last visit, depending on
+  where in the cycle they left. Costs:
+  - An abandoned guest's account, and its line on Results, can no longer be
+    assumed dead after 30 days: a browser that still holds the cookie can
+    keep it alive indefinitely. That matters to any later cleanup (the
+    owner's postponed wipe), which can't tell "abandoned" from the
+    expiry date alone.
+  - A stolen guest cookie stays useful for as long as the thief keeps using
+    it. For a registered account it would expire at 30 days; a guest has no
+    password to change, so claiming (which ends the guest session) is the
+    only way to cut it off.
+  - Registered sessions still don't slide: a registered player logs in
+    again after 30 days. The two kinds of account behave differently here
+    on purpose, because only the guest has no other way back in.
+  - At most one database write per guest per fortnight; every other
+    request's check finds nothing to change.
 - **Orphaned guests pile up.** No cleanup job (out of scope in brief 2), so
   every abandoned guest stays in `users` and on Results with its tag (the
   home page's Regulars leaves unclaimed guests out). The rate limit bounds

@@ -71,7 +71,14 @@ import {
   placeholderQuestionsForUsername,
   questionTextForKey,
 } from "./security-questions.ts";
-import { SESSION_LIFETIME_MS, createSession, deleteSession, userForSessionToken } from "./sessions.ts";
+import {
+  SESSION_LIFETIME_MS,
+  createSession,
+  deleteSession,
+  sessionExpiryForTest,
+  slideGuestSession,
+  userForSessionToken,
+} from "./sessions.ts";
 
 // Opening the database here (src/db.ts) is what step 2/3 needed to show: the
 // file lives under /data in production, with the schema applied on boot.
@@ -100,6 +107,10 @@ function currentUser(c: Context): User | undefined {
 // guest's is passed explicitly at POST /guest.
 function signIn(c: Context, userId: number, lifetimeMs?: number): void {
   const { token, expiresAt } = createSession(userId, lifetimeMs);
+  setSessionCookie(c, token, expiresAt);
+}
+
+function setSessionCookie(c: Context, token: string, expiresAt: string): void {
   setCookie(c, SESSION_COOKIE, token, {
     httpOnly: true,
     sameSite: "Lax",
@@ -150,6 +161,17 @@ app.use("*", async (c, next) => {
     logEvent("action_rejected", { route: c.req.path, status: 403, reason: "cross_site" });
     return c.text("Cross-site requests aren't accepted.", 403);
   }
+  return next();
+});
+
+// Owner decision (4 Nov 2026): guest sessions slide (src/sessions.ts). On any
+// request, before the route runs, so the refreshed cookie goes out on
+// whatever the route answers (a route that then logs out or signs in again
+// appends its own Set-Cookie after this one, and the last one wins).
+app.use("*", async (c, next) => {
+  const token = getCookie(c, SESSION_COOKIE);
+  const expiresAt = token ? slideGuestSession(token) : undefined;
+  if (token && expiresAt) setSessionCookie(c, token, expiresAt);
   return next();
 });
 
@@ -981,6 +1003,17 @@ if (TEST_HOOKS_ENABLED) {
       return c.json({ error: err instanceof PokerError ? err.message : "Bad request." }, 400);
     }
     return c.json({ ok: true });
+  });
+  // Reads, and with {"expiresAt": ISO} first sets, the expiry of the session
+  // the request's cookie names, so the spec can put a guest session near its
+  // end and watch it slide. JSON only, like the route above.
+  app.post("/test-hooks/session", async (c) => {
+    if (!(c.req.header("content-type") ?? "").startsWith("application/json")) return c.json({ error: "JSON only." }, 415);
+    const token = getCookie(c, SESSION_COOKIE);
+    if (!token) return c.json({ error: "No session cookie." }, 400);
+    const body = (await c.req.json().catch(() => ({}))) as { expiresAt?: unknown };
+    const set = typeof body.expiresAt === "string" ? body.expiresAt : undefined;
+    return c.json({ expiresAt: sessionExpiryForTest(token, set) ?? null });
   });
 }
 

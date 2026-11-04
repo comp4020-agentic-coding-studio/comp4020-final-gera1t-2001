@@ -2,6 +2,7 @@ import { randomBytes, randomInt } from "node:crypto";
 
 import { hashSecret } from "./crypto.ts";
 import { db } from "./db.ts";
+import { avatarLetter, guestDisplayName } from "./guest-names.ts";
 
 const MAX_RECOVERY_ATTEMPTS = 5;
 const RECOVERY_LOCK_MS = 60 * 60 * 1000; // 1 hour
@@ -79,8 +80,6 @@ function guestUsername(): string {
   return "guest-" + [...randomBytes(6)].map((b) => BASE32[b % 32]).join("");
 }
 
-const guestDisplayName = (): string => `Guest ${String(randomInt(10_000)).padStart(4, "0")}`;
-
 const isUniqueViolation = (err: unknown): boolean =>
   (err as { code?: string } | null)?.code === "SQLITE_CONSTRAINT_UNIQUE";
 
@@ -91,15 +90,27 @@ const isUniqueViolation = (err: unknown): boolean =>
 // The username's "-" is outside USERNAME_RE, so no registered account can
 // ever hold a guest-shaped name, and a guest's name never passes as a real
 // one. It is unique by the column's constraint: a collision (one in 2^30 per
-// pair) retries with a new name. Display names aren't unique for anyone, but
-// a new guest re-draws its four digits (up to GUEST_NAME_TRIES times) while
-// another account already shows that name, so two guests at one table almost
-// always read differently.
+// pair) retries with a new name.
+//
+// The display name is an animal and two digits (src/guest-names.ts). The
+// animal is one whose avatar letter nobody seated at a table right now has,
+// so a guest who sits straight away (the invite link's path) is told apart
+// from everyone already there by the letter as well as the name. That holds
+// for the table as it is when the guest is made: two guests made before
+// either sits can still share an animal (they'll differ in their digits).
+// Display names aren't unique for anyone, but the digits are re-drawn (up to
+// GUEST_NAME_TRIES times) while another account already shows the name.
 export function createGuest(): User {
   const passwordHash = hashSecret(randomBytes(32).toString("hex"));
+  const seatedNames = db
+    .prepare("SELECT users.display_name AS name FROM seats JOIN users ON users.id = seats.user_id")
+    .all() as { name: string }[];
+  const takenLetters = new Set(seatedNames.map((r) => avatarLetter(r.name)));
   const taken = db.prepare("SELECT 1 FROM users WHERE display_name = ?");
-  let displayName = guestDisplayName();
-  for (let i = 0; i < GUEST_NAME_TRIES && taken.get(displayName); i++) displayName = guestDisplayName();
+  let displayName = guestDisplayName(takenLetters, randomInt);
+  for (let i = 0; i < GUEST_NAME_TRIES && taken.get(displayName); i++) {
+    displayName = guestDisplayName(takenLetters, randomInt);
+  }
   const insert = db.prepare(
     "INSERT INTO users (username, password_hash, display_name, is_guest) VALUES (?, ?, ?, 1)",
   );

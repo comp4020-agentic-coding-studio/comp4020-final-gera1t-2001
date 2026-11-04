@@ -34,16 +34,21 @@ spec.
 ## `TEST_HOOKS=1`: the test-only route
 
 A few states take dozens of real hands to reach, such as both blinds all in
-from the deal. For those, the app has a test-only route,
-`POST /test-hooks/tables/:id/stacks`, which sets seated players' stacks
-between hands. It is mounted only when **both** of these hold when the app
-starts:
+from the deal. For those, the app has test-only routes:
+
+- `POST /test-hooks/tables/:id/stacks` sets seated players' stacks between
+  hands.
+- `POST /test-hooks/session` reads, and can set, the expiry of the caller's
+  own session, so a test can put a guest session near its end and watch it
+  slide.
+
+They are mounted only when **both** of these hold when the app starts:
 
 - `TEST_HOOKS=1` is set, and
 - `NODE_ENV` is not `production`.
 
 The `Dockerfile` sets `NODE_ENV=production`. So the image CI tests and Fly
-runs never has the route, whatever else is set.
+runs never has the routes, whatever else is set.
 
 Set `TEST_HOOKS=1` for **both** the app and `pnpm check`, as with the timing
 overrides listed in `src/poker/live.ts`:
@@ -53,7 +58,7 @@ TEST_HOOKS=1 node src/server.ts    # one shell
 TEST_HOOKS=1 pnpm check            # another
 ```
 
-| Run | Tests that need the route | Test 5b (route returns 404) |
+| Run | Tests that need the routes | Test 5b (both routes return 404) |
 |---|---|---|
 | `TEST_HOOKS=1` on both | run; a missing route is a failure, not a skip | skipped |
 | Without it, locally or in CI | skipped, and counted as skipped in vitest's summary | runs and must pass |

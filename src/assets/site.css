@@ -66,7 +66,7 @@ select { text-overflow: ellipsis; }
 }
 .site-nav button:hover { color: var(--text); }
 /* A guest's name in the header, and the way to keep the account. One group,
-   so it wraps as a unit on a phone; the name is a label ("as Guest 0412"),
+   so it wraps as a unit on a phone; the name is a label ("as Wombat 27"),
    not one more link. */
 .site-nav .guest-group { display: inline-flex; flex-wrap: wrap; align-items: baseline; gap: .25rem 1rem; }
 .site-nav .guest-as { color: var(--muted); font-size: .875em; margin-right: -.7rem; }

@@ -11,6 +11,7 @@ import {
   SSE_HEARTBEAT_MS,
   TURN_TIMEOUT_SECONDS,
 } from "../src/poker/live.ts";
+import { GUEST_ANIMALS, avatarLetter } from "../src/guest-names.ts";
 
 // These tests sit real users at the one seeded table ("Home game", id 1) and
 // play real hands, so — like spec/accounts.test.ts — they only run locally,
@@ -518,6 +519,14 @@ describe.skipIf(!isLocal)("poker (writes test data — local only)", () => {
         body: JSON.stringify({ [alice.userId]: 1000 }),
       });
       expect(res.status).toBe(404);
+      // The session hook (owner decision after Step 11) likewise: a JSON
+      // body with a session cookie would get 200 from a mounted route.
+      const session = await fetch(new URL("/test-hooks/session", baseUrl), {
+        method: "POST",
+        headers: { "content-type": "application/json", cookie: alice.cookie },
+        body: "{}",
+      });
+      expect(session.status).toBe(404);
     },
   );
 
@@ -1675,6 +1684,28 @@ describe.skipIf(!isLocal)("guests at the table (writes test data — local only)
       recent: [...doc.querySelectorAll(`#recent td[data-user-id="${userId}"]`)].map((td) => td.querySelector("[data-guest]") !== null),
     };
   }
+
+  // Owner decision (4 Nov 2026, after Step 11): guests are an animal and two
+  // digits, and the animal is one whose avatar letter nobody seated has. Read
+  // from the page itself: each seat's avatar letter and name plate.
+  it("35. guests who sit one after another get different animals, and each avatar letter is their animal's", async () => {
+    for (let i = 0; i < 3; i++) players.push(await sit((await guestCookie()).cookie));
+    const doc = new JSDOM(
+      await (await fetch(new URL(`/tables/${TABLE_ID}`, baseUrl), { headers: { cookie: players[0].cookie } })).text(),
+    ).window.document;
+    const seats = [...doc.querySelectorAll(".seat[data-seat]:not(.empty)")].map((el) => ({
+      letter: el.querySelector(".avatar > span")!.textContent!,
+      // The plate's name without the "(you)" tag.
+      name: el.querySelector(".plate .name")!.firstChild!.textContent!,
+    }));
+    expect(seats).toHaveLength(3);
+    for (const { letter, name } of seats) {
+      const animal = name.split(" ")[0];
+      expect(GUEST_ANIMALS).toContain(animal);
+      expect(letter).toBe(avatarLetter(animal));
+    }
+    expect(new Set(seats.map((s) => s.letter)).size).toBe(3);
+  });
 
   it("33. POST /guest signs in and lands on the table, where the guest can sit and act", async () => {
     const { cookie, landing } = await guestCookie();
