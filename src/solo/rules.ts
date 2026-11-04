@@ -7,17 +7,24 @@
 //
 // What the evaluator does, read from its source (node_modules/.pnpm/
 // @pokertools+evaluator@1.0.20/.../dist):
-//   - index.d.ts, evaluate(): "Evaluates 5, 6, or 7 card integer codes.
-//     Returns a strength score (lower is better)." evaluateStrings() parses
-//     ['As', 'Kd', ...] and calls it; for 7 cards it scores the best five.
+//   - index.d.ts, evaluateStrings(): "Evaluates an array of card strings
+//     (e.g. ['As', 'Kd', ...]). Slightly slower than `evaluate` due to
+//     parsing overhead." index.js: it is evaluate(getCardCodes(cards)), and
+//     evaluate()'s doc says "Evaluates 5, 6, or 7 card integer codes.
+//     Returns a strength score (lower is better)." That a 7-card score is
+//     the best five's is inferred, and probed: a royal among 7 scores 1.
 //   - utils/card.js: a card is a rank in "23456789TJQKA" then a suit in
 //     "shdc", the same strings the table's engine and render.js use.
 //   - models/hand-rank.d.ts: "export declare const enum HandRank {
 //     StraightFlush = 0, FourOfAKind = 1, FullHouse = 2, Flush = 3,
 //     Straight = 4, ThreeOfAKind = 5, TwoPair = 6, OnePair = 7,
-//     HighCard = 8 }". A const enum has no runtime object Node's type
-//     stripping can use (the app runs .ts directly), so the numbers are
-//     named here and spec/solo.test.ts checks them against the library's
+//     HighCard = 8 }". At runtime the object does exist (hand-rank.js
+//     builds it and index.js exports it; node prints HandRank.Flush = 3),
+//     but the type is a const enum: with this repo's verbatimModuleSyntax,
+//     tsc refuses the import ("TS2748: Cannot access ambient const enums
+//     when 'verbatimModuleSyntax' is enabled"), and type stripping can't
+//     inline const enum members the way tsc would. So the numbers are
+//     named here, and spec/solo.test.ts checks them against the library's
 //     own HAND_RANK_DESCRIPTIONS. There is no royal flush category: a royal
 //     is a StraightFlush whose score is 1, the best possible (an ace-high
 //     straight flush in any suit; a 5-high one scores 10).

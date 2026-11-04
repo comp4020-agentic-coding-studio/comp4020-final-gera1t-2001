@@ -2,6 +2,7 @@
 // chips only, so the nets are bragging rights, not money; the page says so.
 import { db } from "./db.ts";
 import { escapeHtml } from "./html.ts";
+import { recentSoloHands, soloLedger } from "./solo/game.ts";
 
 export interface LedgerRow {
   userId: number;
@@ -91,6 +92,49 @@ function netCell(n: number): string {
   return `<td class="num${n < 0 ? " neg" : ""}" data-net="${n}">${signed(n)}</td>`;
 }
 
+// Brief 2 Step 12: Against the house. Its own ledger and its own recent
+// hands, from solo_hands only; never summed with the table's.
+const OUTCOME_WORDS: Record<string, string> = {
+  fold: "Folded",
+  no_qualify: "Dealer didn't qualify",
+  player_wins: "Beat the dealer",
+  dealer_wins: "Dealer won",
+  push: "Push",
+};
+
+function houseSection(youId: number): string {
+  const rows = soloLedger();
+  const recent = recentSoloHands(RECENT_HANDS);
+  const ledgerHtml = rows.length
+    ? `<table class="ledger" id="house-ledger">
+        <caption class="visually-hidden">Net chips against the house per player, best first</caption>
+        <thead><tr><th scope="col">Player</th><th scope="col" class="num">Hands</th><th scope="col" class="num">Net</th></tr></thead>
+        <tbody>${rows
+          .map(
+            (r) =>
+              `<tr data-user-id="${r.userId}"${r.userId === youId ? ` class="you"` : ""}><th scope="row">${playerName(r)}${r.userId === youId ? " (you)" : ""}</th>` +
+              `<td class="num" data-hands="${r.hands}">${r.hands.toLocaleString("en-AU")}</td>${netCell(r.net)}</tr>`,
+          )
+          .join("")}</tbody>
+      </table>`
+    : `<p>No one has played the house yet.</p>`;
+  const recentHtml = recent.length
+    ? `<h3>${recent.length < RECENT_HANDS ? "Hands so far" : `Last ${RECENT_HANDS} hands`}</h3>
+      <table class="ledger" id="house-recent">
+        <caption class="visually-hidden">The last ${recent.length} ${recent.length === 1 ? "hand" : "hands"} against the house, newest first</caption>
+        <thead><tr><th scope="col">Ended</th><th scope="col">Player</th><th scope="col">Result</th><th scope="col" class="num">Net</th></tr></thead>
+        <tbody>${recent
+          .map(
+            (h) =>
+              `<tr><td><time datetime="${escapeHtml(h.endedAt)}">${escapeHtml(h.endedAt.slice(0, 16).replace("T", " "))} UTC</time></td>` +
+              `<td data-user-id="${h.userId}">${playerName(h)}</td><td>${escapeHtml(OUTCOME_WORDS[h.outcome] ?? h.outcome)}</td>${netCell(h.net)}</tr>`,
+          )
+          .join("")}</tbody>
+      </table>`
+    : "";
+  return `<h2>Against the house</h2>${ledgerHtml}${recentHtml}`;
+}
+
 export function resultsPage(tableId: number, youId: number): string {
   const rows = ledger(tableId);
   const hands = recentHands(tableId);
@@ -132,10 +176,11 @@ export function resultsPage(tableId: number, youId: number): string {
 
   return `<main class="column results">
       <h1>Results</h1>
-      <p class="lede-room">Play chips only. Nothing here is money.</p>
-      <h2>Ledger</h2>
+      <p class="lede-room">Play chips only. Nothing here is money. The table and the house are kept apart; their nets are never added together.</p>
+      <h2>Table</h2>
       ${ledgerHtml}
-      ${hands.length ? `<h2>${hands.length < RECENT_HANDS ? "Hands so far" : `Last ${RECENT_HANDS} hands`}</h2>${handsHtml}` : ""}
+      ${hands.length ? `<h3>${hands.length < RECENT_HANDS ? "Hands so far" : `Last ${RECENT_HANDS} hands`}</h3>${handsHtml}` : ""}
+      ${houseSection(youId)}
     </main>
     <script>
       // The server runs in UTC; show each hand's end in this browser's time.

@@ -52,6 +52,18 @@ import { resultsPage } from "./results.ts";
 import { SSE_RETRY_MS, SSE_HEARTBEAT_MS } from "./poker/live.ts";
 import { TABLE_RENDER_JS, TABLE_RENDER_VERSION, renderTablePage } from "./poker/page.ts";
 import {
+  SoloError,
+  callHand,
+  cashOut,
+  dealHand,
+  endSessionIfBust,
+  foldHand,
+  setNextDeckForTest,
+  soloHandsFor,
+  soloView,
+} from "./solo/game.ts";
+import { SOLO_RENDER_JS, SOLO_RENDER_VERSION, renderSoloPage } from "./solo/page.ts";
+import {
   PokerError,
   applyAction,
   buildView,
@@ -196,6 +208,17 @@ app.get("/assets/table-render.js", (c) => {
   });
 });
 
+// The solo page's renderer (src/solo/page.ts serves it with its one import
+// pointed at /assets/table-render.js). Same caching rule.
+app.get("/assets/solo-render.js", (c) => {
+  const cacheControl =
+    c.req.query("v") === SOLO_RENDER_VERSION ? "public, max-age=31536000, immutable" : "no-cache";
+  return c.body(SOLO_RENDER_JS, 200, {
+    "content-type": "text/javascript; charset=utf-8",
+    "cache-control": cacheControl,
+  });
+});
+
 app.get("/favicon.svg", (c) =>
   c.body(FAVICON_SVG, 200, { "content-type": "image/svg+xml", "cache-control": "no-cache" }),
 );
@@ -253,7 +276,10 @@ function homeHero(view: TableView, user: User | undefined): string {
       <div class="hero-text">
         <h1 id="hero-title">${escapeHtml(view.table.name)}</h1>
         <p class="hero-status" data-status>${escapeHtml(status)}</p>
-        <a class="primary hero-cta" href="/tables/${view.table.id}">${youSeated ? "Back to the table" : "Take a seat"}</a>
+        <div class="hero-ctas">
+          <a class="primary hero-cta" href="/tables/${view.table.id}">${youSeated ? "Back to the table" : "Take a seat"}</a>
+          <a class="secondary hero-cta" href="/solo">Play the house</a>
+        </div>
       </div>
     </section>`;
 }
@@ -979,6 +1005,72 @@ app.post("/tables/:id/act", async (c) => {
   return c.json(buildView(tableId, user.id));
 });
 
+// --- Solo: Casino Hold'em against the house (brief 2 Step 12) ----------------
+//
+// Request/response, no stream. Every move is a form POST. A client that asks
+// for JSON (the page's script, the spec) gets the new state as JSON; a plain
+// form post gets a 303 back to /solo, so the page works without JavaScript.
+// Nothing here touches the table's seats, engine, streams or presence.
+
+function wantsJson(c: Context): boolean {
+  return (c.req.header("accept") ?? "").includes("application/json");
+}
+
+app.get("/solo", (c) => {
+  const user = currentUser(c);
+  if (!user) return c.redirect(`/login?next=${encodeURIComponent("/solo")}`, 303);
+  return c.html(renderSoloPage(soloView(user.id), user));
+});
+
+app.get("/solo/view", (c) => {
+  const user = currentUser(c);
+  if (!user) return c.json({ error: "Log in first." }, 401);
+  return c.json(soloView(user.id));
+});
+
+// Your own settled hands, oldest first, with their cards: what anyone needs
+// to recompute each net. Never the live hand.
+app.get("/solo/hands", (c) => {
+  const user = currentUser(c);
+  if (!user) return c.json({ error: "Log in first." }, 401);
+  return c.json(soloHandsFor(user.id));
+});
+
+// One shape for every move: run it, then (after a settled hand) end the
+// session if the stack can't cover another ante, and answer.
+async function soloMove(c: Context, route: string, move: (userId: number, body: Record<string, unknown>) => void, settles: boolean) {
+  const user = currentUser(c);
+  if (!user) return wantsJson(c) ? c.json({ error: "Log in first." }, 401) : c.redirect("/login?next=/solo", 303);
+  const body = (await c.req.parseBody()) as Record<string, unknown>;
+  try {
+    move(user.id, body);
+  } catch (err) {
+    const message = err instanceof SoloError ? err.message : "Something went wrong.";
+    if (!(err instanceof SoloError)) console.error(`solo: ${route} failed for user ${user.id}`, err);
+    logEvent("action_rejected", { route: `solo_${route}`, user: user.id, status: 400, reason: message });
+    if (wantsJson(c)) return c.json({ error: message }, 400);
+    return c.html(renderSoloPage(soloView(user.id), user, message), 400);
+  }
+  const busted = settles && endSessionIfBust(user.id);
+  const view = soloView(user.id);
+  logEvent("solo", { route, user: user.id, stack: view.stack, net: view.last?.net, busted });
+  if (wantsJson(c)) return c.json(view);
+  return c.redirect("/solo", 303);
+}
+
+app.post("/solo/deal", (c) =>
+  soloMove(c, "deal", (userId, body) => {
+    const raw = typeof body.ante === "string" ? body.ante.trim() : "";
+    // Digits only: "2.5", "1e2", "-5" and "" are all refused as not a whole
+    // number of chips, rather than rounded into one.
+    if (!/^\d+$/.test(raw)) throw new SoloError("The ante is a whole number of chips, 1 or more.");
+    dealHand(userId, Number(raw));
+  }, false),
+);
+app.post("/solo/call", (c) => soloMove(c, "call", (userId) => callHand(userId), true));
+app.post("/solo/fold", (c) => soloMove(c, "fold", (userId) => foldHand(userId), true));
+app.post("/solo/cash-out", (c) => soloMove(c, "cash_out", (userId) => cashOut(userId), false));
+
 // Test hooks (brief 2 step 10b): routes the spec uses to reach states real
 // play can't reach quickly. Mounted only when BOTH TEST_HOOKS=1 is set AND
 // NODE_ENV isn't "production". The Dockerfile sets NODE_ENV=production for
@@ -1002,6 +1094,21 @@ if (TEST_HOOKS_ENABLED) {
     } catch (err) {
       return c.json({ error: err instanceof PokerError ? err.message : "Bad request." }, 400);
     }
+    return c.json({ ok: true });
+  });
+  // Brief 2 Step 12: the next solo deal for the signed-in user uses this deck
+  // order ({"deck": ["As", ...]}: 52 distinct cards) instead of a shuffle,
+  // so the spec can reach each paytable category and the qualifying
+  // boundary. JSON only, like the routes beside it.
+  app.post("/test-hooks/solo/deck", async (c) => {
+    if (!(c.req.header("content-type") ?? "").startsWith("application/json")) return c.json({ error: "JSON only." }, 415);
+    const user = currentUser(c);
+    if (!user) return c.json({ error: "Log in first." }, 401);
+    const body = (await c.req.json().catch(() => ({}))) as { deck?: unknown };
+    const deck = Array.isArray(body.deck) ? body.deck.filter((x): x is string => typeof x === "string") : [];
+    const valid = deck.length >= 9 && new Set(deck).size === deck.length && deck.every((x) => /^[2-9TJQKA][shdc]$/.test(x));
+    if (!valid) return c.json({ error: "A deck is at least 9 distinct cards like \"As\"." }, 400);
+    setNextDeckForTest(user.id, deck);
     return c.json({ ok: true });
   });
   // Reads, and with {"expiresAt": ISO} first sets, the expiry of the session

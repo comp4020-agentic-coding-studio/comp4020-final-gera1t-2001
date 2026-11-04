@@ -2,6 +2,7 @@ import { randomBytes } from "node:crypto";
 import { JSDOM } from "jsdom";
 import { describe, expect, inject, it } from "vitest";
 
+import { evaluateStrings, getCardCodes, rank } from "@pokertools/evaluator";
 import {
   FLUSH,
   FOUR_OF_A_KIND,
@@ -23,9 +24,10 @@ import {
   settle,
 } from "../src/solo/rules.ts";
 
-// Brief 2 Step 12: Casino Hold'em against the house. Solo never touches table
-// 1 (except one test that only sits a player there to show their table stack
-// doesn't move; it never deals), so these tests have their own file.
+// Brief 2 Step 12: Casino Hold'em against the house. Nothing here touches
+// table 1, so these tests have their own file. (The one solo test that sits
+// a player at the table, to show their table stack doesn't move, is in
+// spec/poker.test.ts with every other test on table 1.)
 //
 // The first two describes are pure (the rules against the evaluator) and run
 // everywhere, CI included. The rest create accounts and play hands, so they
@@ -208,6 +210,26 @@ async function setDeck(cookie: string, deck: string[]): Promise<void> {
 
 const cardsOf = (s: string): string[] => (s ? s.split(" ") : []);
 
+// The settlement, worked out here from the brief's rules with the evaluator
+// directly, not with src/solo/rules.ts (which the server uses), so a wrong
+// rule there can't agree with itself. Lower scores are stronger
+// (index.d.ts). Categories are the evaluator's numbers: 0 straight flush,
+// 1 four of a kind, 2 full house, 3 flush; a royal scores 1.
+function expectedNet(ante: number, folded: boolean, player: string[], dealer: string[], board: string[]): number {
+  if (folded) return -ante;
+  const p = [...player, ...board];
+  const d = [...dealer, ...board];
+  const ps = evaluateStrings(p);
+  const ds = evaluateStrings(d);
+  const cat = rank(getCardCodes(p));
+  const pays = cat === 0 ? (ps === 1 ? 100 : 20) : cat === 1 ? 10 : cat === 2 ? 3 : cat === 3 ? 2 : 1;
+  const qualifies = ds <= evaluateStrings(["4s", "4h", "5d", "3c", "2h"]);
+  if (!qualifies) return ante * pays; // call pushes, ante pays the paytable
+  if (ps < ds) return ante * pays + 2 * ante; // call 1:1, ante pays the paytable
+  if (ps > ds) return -3 * ante; // ante and call lost
+  return 0; // both push
+}
+
 describe.skipIf(!isLocal)("solo against the house (writes test data — local only)", () => {
   it("a new player starts with the table's buy-in, separate from any table stack", async () => {
     const cookie = await register();
@@ -280,9 +302,7 @@ describe.skipIf(!isLocal)("solo against the house (writes test data — local on
       const folded = h.outcome === "fold";
       const board = cardsOf(h.board);
       expect(board).toHaveLength(folded ? 3 : 5);
-      const recomputed = settle(h.ante, folded, cardsOf(h.player_cards), cardsOf(h.dealer_cards), board);
-      expect(h.net).toBe(recomputed.net);
-      expect(h.outcome).toBe(recomputed.outcome);
+      expect(h.net).toBe(expectedNet(h.ante, folded, cardsOf(h.player_cards), cardsOf(h.dealer_cards), board));
     }
     // And the stack moved by exactly the sum of the nets.
     const view = await soloView(cookie);
@@ -310,11 +330,59 @@ describe.skipIf(!isLocal)("solo against the house (writes test data — local on
       }
     }
     expect(busted).toBe(true);
-    // A fresh session at the buy-in, and the page says so in the owner's words.
+    // A fresh session at the buy-in.
     expect(view.stack).toBe(buyIn);
     expect(view.sessionNet).toBe(0);
+    // The hand that busted the last stack is what the felt shows, with the
+    // notice: in the response, and again after a reload (the page as a GET,
+    // which is all a browser without JavaScript ever sees).
+    const bustingHand = (await hands(cookie)).at(-1)!;
+    for (const v of [view, await soloView(cookie)]) {
+      expect(v.newStack).toBe(true);
+      expect(v.last?.net).toBe(bustingHand.net);
+      expect(v.last?.player).toEqual(cardsOf(bustingHand.player_cards));
+    }
     const doc = new JSDOM(await (await fetch(new URL("/solo", baseUrl), { headers: { cookie } })).text()).window.document;
-    expect(doc.querySelector("[data-new-stack]")).toBeNull(); // shown once, in the response to the hand that busted
+    expect(doc.querySelector("[data-new-stack]")?.textContent).toBe(
+      `You're out. New stack of ${buyIn.toLocaleString("en-AU")} play chips.`,
+    );
+    expect(Number(doc.querySelector("[data-result]")!.getAttribute("data-net"))).toBe(bustingHand.net);
+    // The next deal clears it: no notice, and the old hand is gone from the felt.
+    const next = await ok(cookie, "/solo/deal", { ante: "5" });
+    expect(next.newStack).toBe(false);
+    const after = await ok(cookie, "/solo/fold");
+    expect(after.newStack).toBe(false);
+    expect(after.last?.net).toBe(-5);
+    expect((await soloView(cookie)).newStack).toBe(false);
+  });
+
+  it("without JavaScript a bust still says You're out: the form post's 303 lands on a page with the notice", async () => {
+    const cookie = await register();
+    const { buyIn } = await soloView(cookie);
+    let notice: string | null = null;
+    for (let i = 0; i < 60 && notice === null; i++) {
+      const { maxAnte } = await soloView(cookie);
+      for (const [path, fields] of [["/solo/deal", { ante: String(maxAnte) }], ["/solo/call", {}]] as const) {
+        const res = await fetch(new URL(path, baseUrl), {
+          method: "POST",
+          headers: { cookie },
+          body: new URLSearchParams(fields),
+          redirect: "manual",
+        });
+        expect(res.status, path).toBe(303);
+      }
+      const doc = new JSDOM(await (await fetch(new URL("/solo", baseUrl), { headers: { cookie } })).text()).window.document;
+      notice = doc.querySelector("[data-new-stack]")?.textContent ?? null;
+    }
+    expect(notice).toBe(`You're out. New stack of ${buyIn.toLocaleString("en-AU")} play chips.`);
+  });
+
+  it("cashing out of a stack with no hand played records no session and changes nothing", async () => {
+    const cookie = await register();
+    const first = await ok(cookie, "/solo/cash-out");
+    const second = await ok(cookie, "/solo/cash-out");
+    expect(first.stack).toBe(first.buyIn);
+    expect(second).toEqual(first);
   });
 
   it("cash out records the session and the next visit starts at the buy-in; not mid-hand", async () => {
@@ -400,32 +468,6 @@ describe.skipIf(!isLocal)("solo against the house (writes test data — local on
     expect((await soloView(cookie)).live?.ante).toBe(5);
   });
 
-  it("a seated table player loses a solo hand; their table stack is unchanged", async () => {
-    const cookie = await register();
-    const sit = await fetch(new URL("/tables/1/sit", baseUrl), { method: "POST", headers: { cookie } });
-    expect(sit.status).toBe(200);
-    const tableStack = async (): Promise<number> => {
-      const v = (await (await fetch(new URL("/tables/1/view", baseUrl), { headers: { cookie } })).json()) as {
-        you: number;
-        seats: { userId: number; stack: number }[];
-      };
-      return v.seats.find((s) => s.userId === v.you)!.stack;
-    };
-    try {
-      const before = await tableStack();
-      let lost = false;
-      for (let i = 0; i < 20 && !lost; i++) {
-        await ok(cookie, "/solo/deal", { ante: "10" });
-        const v = await ok(cookie, "/solo/fold"); // a fold always loses the ante
-        lost = v.last!.net < 0;
-      }
-      expect(lost).toBe(true);
-      expect(await tableStack()).toBe(before);
-    } finally {
-      await fetch(new URL("/tables/1/leave", baseUrl), { method: "POST", headers: { cookie } });
-    }
-  });
-
   it("Results: Against the house lists each player's solo net as the sum of their solo_hands rows, never summed with the table", async () => {
     const cookie = await register();
     for (let i = 0; i < 3; i++) {
@@ -474,9 +516,10 @@ describe.skipIf(!isLocal || !hooks)("solo with a fixed deck (needs TEST_HOOKS=1)
     { name: "dealer wins", deck: ["2c", "3d", "Ah", "Qc", "Ks", "Kh", "9d", "7s", "4c"], outcome: "dealer_wins" },
     { name: "a push", deck: ["2c", "3d", "4h", "5s", "As", "Ks", "Qd", "Jh", "Tc"], outcome: "push" },
     // The boundary, as seven-card dealer hands: a pair of threes with A-K-Q
-    // high doesn't qualify; the weakest seven-card pair of fours does.
+    // high doesn't qualify (5746); the weakest seven-card pair of fours,
+    // 4-4-8-7-5 (+3, 2: 5727, found by trying every one), does.
     { name: "dealer 3-3 A-K-Q doesn't qualify", deck: ["9c", "8c", "3s", "3h", "Ad", "Kc", "Qh", "7s", "2d"], outcome: "no_qualify", qualified: false },
-    { name: "dealer 4-4 8-7-6 qualifies", deck: ["9s", "9c", "4s", "4h", "8d", "7c", "6h", "2s", "3d"], outcome: "player_wins", qualified: true },
+    { name: "dealer 4-4 8-7-5 qualifies", deck: ["9s", "9c", "4s", "4h", "8d", "7c", "5h", "3s", "2d"], outcome: "player_wins", qualified: true },
   ];
 
   for (const c of cases) {
@@ -501,6 +544,29 @@ describe.skipIf(!isLocal || !hooks)("solo with a fixed deck (needs TEST_HOOKS=1)
       }
     });
   }
+});
+
+// The result line names a royal as one, and says whose hand is whose when
+// both are the same kind. Read from the page's DOM.
+describe.skipIf(!isLocal || !hooks)("solo result line (needs TEST_HOOKS=1)", () => {
+  async function resultAfterCall(deck: string[]): Promise<string> {
+    const cookie = await register();
+    await setDeck(cookie, deck);
+    await ok(cookie, "/solo/deal", { ante: "10" });
+    await ok(cookie, "/solo/call");
+    const doc = new JSDOM(await (await fetch(new URL("/solo", baseUrl), { headers: { cookie } })).text()).window.document;
+    return doc.querySelector("[data-result]")!.textContent!;
+  }
+  it("a royal is named, and the ante's multiple is the paytable's", async () => {
+    expect(await resultAfterCall(["As", "Ks", "3h", "8d", "Qs", "Js", "Ts", "2d", "7c"])).toBe(
+      "Dealer doesn't qualify. Ante pays 100:1. +1,000",
+    );
+  });
+  it("a pair against a pair says whose is whose", async () => {
+    expect(await resultAfterCall(["9s", "9c", "4s", "4h", "8d", "7c", "5h", "3s", "2d"])).toBe(
+      "Your pair beats the dealer's pair. +30",
+    );
+  });
 });
 
 // The deck hook must not exist in the build that ships: CI runs the image

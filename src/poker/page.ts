@@ -412,27 +412,10 @@ openStream();
 // Ported from docs/design/table-mockup.html: the oval, the rail and the lamp,
 // six seat slots (a phone set at <= 640 px, where the oval stands up), cards,
 // the turn ring, the bubbles and the dock. Tokens come from site.css.
-const TABLE_STYLE = `
-  .table-page { padding: 0 0 2rem; }
-  .table-page > h1 { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
-  .visually-hidden { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
-  .stage { padding: clamp(1rem, 3vw, 2.5rem) clamp(1rem, 3vw, 2rem) 0; }
-  .table {
-    position: relative; max-width: 1040px; margin: 0 auto; aspect-ratio: 2.05 / 1; border-radius: 999px;
-    background: radial-gradient(ellipse 55% 60% at 50% 46%, var(--felt-lit), var(--felt) 70%);
-    box-shadow: 0 0 0 14px var(--rail), 0 0 0 16px var(--rail-hi), 0 30px 80px rgba(0,0,0,.45);
-    margin-block: 56px 72px;
-  }
-  .center {
-    position: absolute; left: 50%; top: 46%; transform: translate(-50%, -50%);
-    display: grid; justify-items: center; gap: .6rem; text-align: center;
-  }
-  .pot { font: 1.05rem var(--sans); color: #e9f3ee; }
-  .pot strong { font: 1.6rem/1 var(--serif); color: #fff; margin-left: .35rem; font-weight: 400; }
-  .street { font-size: .85rem; color: #bfe0d1; }
-  .board { display: flex; gap: .45rem; }
-
-  .card {
+// Brief 2 Step 12: the cards and the dock are shared with the solo page
+// (src/solo/page.ts), so they're named pieces of TABLE_STYLE rather than
+// copies: one set of rules, the table's deployed look, on both pages.
+export const CARD_STYLE = `  .card {
     --w: 3.4rem; width: var(--w); aspect-ratio: 5 / 7; flex: none;
     background: var(--card); color: var(--ink); border-radius: calc(var(--w) * .12);
     box-shadow: 0 2px 0 rgba(0,0,0,.15), 0 6px 14px rgba(0,0,0,.25);
@@ -455,7 +438,73 @@ const TABLE_STYLE = `
   .card.sm .idx { position: static; font-size: .95rem; }
   .card.sm.back { border-width: 2px; }
   .card.lg { --w: 4.6rem; }
+`;
 
+export const DOCK_STYLE = `  /* The dock */
+  .dock {
+    max-width: 1040px; margin: 0 auto 2rem; background: var(--room-2); border: 1px solid var(--line);
+    border-radius: 1rem; padding: 1rem 1.25rem;
+    display: grid; grid-template-columns: auto 1fr; gap: 1rem 1.5rem; align-items: center;
+  }
+  .dock .mine { display: flex; gap: .4rem; }
+  .dock .mine:empty { display: none; }
+  .dock:has(.mine:empty) > * { grid-column: 1 / -1; }
+  .watching { margin: 0; color: var(--muted); }
+  .prompt { font-size: 1.05rem; margin: 0; }
+  .prompt strong { font-family: var(--serif); font-weight: 400; font-size: 1.25rem; }
+  .prompt .clock { color: var(--brass); font-weight: 700; margin-left: .35rem; }
+  .prompt .clock-plain { font-weight: 700; }
+  /* Its own line on a phone. The space before it stays in the text, for
+     screen readers and copy; a block's leading whitespace isn't drawn. */
+  .prompt .next-hand { color: var(--muted); white-space: nowrap; margin-left: .2rem; }
+  @media (max-width: 640px) { .prompt .next-hand { display: block; margin-left: 0; } }
+  .actions, .table-controls { display: flex; flex-wrap: wrap; gap: .6rem; align-items: center; grid-column: 2; }
+  .table-controls form { display: contents; }
+  .btn {
+    font: 700 1rem var(--sans); border-radius: .65rem; padding: .7rem 1.2rem;
+    border: 2px solid transparent; cursor: pointer; min-height: 3rem;
+  }
+  .btn.fold { background: transparent; color: var(--text); border-color: var(--line); }
+  .btn.call { background: var(--card); color: var(--ink); }
+  .btn.raise { background: var(--brass); color: var(--brass-ink); }
+  .btn:disabled { opacity: .5; cursor: not-allowed; }
+  .raise-box { display: flex; align-items: center; gap: .4rem; flex-wrap: wrap; }
+  .raise-box input {
+    width: 6.5rem; font: 700 1rem var(--sans); padding: .6rem .7rem; min-height: 3rem;
+    border-radius: .65rem; border: 2px solid var(--line); background: var(--room); color: var(--text);
+  }
+  .chip-btn {
+    font: 600 .875rem var(--sans); padding: .45rem .7rem; border-radius: 999px; min-height: 2.25rem;
+    background: transparent; border: 1px solid var(--line); color: var(--muted); cursor: pointer;
+  }
+  .chip-btn:hover { color: var(--text); border-color: var(--muted); }
+  /* The C9 bug guard: these set display, which would beat the UA's
+     [hidden] { display: none } at equal specificity, so a hidden control
+     would still show. Caught by looking at a real render, not by pnpm check. */
+  .actions[hidden], .table-controls form[hidden], .raise-box[hidden] { display: none; }
+`;
+
+export const TABLE_STYLE = `
+  .table-page { padding: 0 0 2rem; }
+  .table-page > h1 { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+  .visually-hidden { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+  .stage { padding: clamp(1rem, 3vw, 2.5rem) clamp(1rem, 3vw, 2rem) 0; }
+  .table {
+    position: relative; max-width: 1040px; margin: 0 auto; aspect-ratio: 2.05 / 1; border-radius: 999px;
+    background: radial-gradient(ellipse 55% 60% at 50% 46%, var(--felt-lit), var(--felt) 70%);
+    box-shadow: 0 0 0 14px var(--rail), 0 0 0 16px var(--rail-hi), 0 30px 80px rgba(0,0,0,.45);
+    margin-block: 56px 72px;
+  }
+  .center {
+    position: absolute; left: 50%; top: 46%; transform: translate(-50%, -50%);
+    display: grid; justify-items: center; gap: .6rem; text-align: center;
+  }
+  .pot { font: 1.05rem var(--sans); color: #e9f3ee; }
+  .pot strong { font: 1.6rem/1 var(--serif); color: #fff; margin-left: .35rem; font-weight: 400; }
+  .street { font-size: .85rem; color: #bfe0d1; }
+  .board { display: flex; gap: .45rem; }
+
+${CARD_STYLE}
   /* Six fixed slots around the oval; slot 0 is always the viewer. --bx/--by
      place the bet marker toward the centre. A zero is written 0rem: a bare 0
      makes calc(-50% + 0) invalid, which throws away the whole transform (the
@@ -515,49 +564,7 @@ const TABLE_STYLE = `
   .said.auto { background: var(--brass); color: var(--brass-ink); }
   .seat.empty .avatar { border-style: dashed; color: var(--muted); font: .8rem var(--sans); }
 
-  /* The dock */
-  .dock {
-    max-width: 1040px; margin: 0 auto 2rem; background: var(--room-2); border: 1px solid var(--line);
-    border-radius: 1rem; padding: 1rem 1.25rem;
-    display: grid; grid-template-columns: auto 1fr; gap: 1rem 1.5rem; align-items: center;
-  }
-  .dock .mine { display: flex; gap: .4rem; }
-  .dock .mine:empty { display: none; }
-  .dock:has(.mine:empty) > * { grid-column: 1 / -1; }
-  .watching { margin: 0; color: var(--muted); }
-  .prompt { font-size: 1.05rem; margin: 0; }
-  .prompt strong { font-family: var(--serif); font-weight: 400; font-size: 1.25rem; }
-  .prompt .clock { color: var(--brass); font-weight: 700; margin-left: .35rem; }
-  .prompt .clock-plain { font-weight: 700; }
-  /* Its own line on a phone. The space before it stays in the text, for
-     screen readers and copy; a block's leading whitespace isn't drawn. */
-  .prompt .next-hand { color: var(--muted); white-space: nowrap; margin-left: .2rem; }
-  @media (max-width: 640px) { .prompt .next-hand { display: block; margin-left: 0; } }
-  .actions, .table-controls { display: flex; flex-wrap: wrap; gap: .6rem; align-items: center; grid-column: 2; }
-  .table-controls form { display: contents; }
-  .btn {
-    font: 700 1rem var(--sans); border-radius: .65rem; padding: .7rem 1.2rem;
-    border: 2px solid transparent; cursor: pointer; min-height: 3rem;
-  }
-  .btn.fold { background: transparent; color: var(--text); border-color: var(--line); }
-  .btn.call { background: var(--card); color: var(--ink); }
-  .btn.raise { background: var(--brass); color: var(--brass-ink); }
-  .btn:disabled { opacity: .5; cursor: not-allowed; }
-  .raise-box { display: flex; align-items: center; gap: .4rem; flex-wrap: wrap; }
-  .raise-box input {
-    width: 6.5rem; font: 700 1rem var(--sans); padding: .6rem .7rem; min-height: 3rem;
-    border-radius: .65rem; border: 2px solid var(--line); background: var(--room); color: var(--text);
-  }
-  .chip-btn {
-    font: 600 .875rem var(--sans); padding: .45rem .7rem; border-radius: 999px; min-height: 2.25rem;
-    background: transparent; border: 1px solid var(--line); color: var(--muted); cursor: pointer;
-  }
-  .chip-btn:hover { color: var(--text); border-color: var(--muted); }
-  /* The C9 bug guard: these set display, which would beat the UA's
-     [hidden] { display: none } at equal specificity, so a hidden control
-     would still show. Caught by looking at a real render, not by pnpm check. */
-  .actions[hidden], .table-controls form[hidden], .raise-box[hidden] { display: none; }
-
+${DOCK_STYLE}
   .table-notice { max-width: 1040px; margin: 1rem auto 0; padding: 0 clamp(1rem, 3vw, 2rem); color: var(--muted); font-style: italic; }
   .status-line { max-width: 1040px; margin: .75rem auto 0; padding: 0 clamp(1rem, 3vw, 2rem); color: #f0b7b3; font-weight: 600; }
   .status-line:empty { display: none; }

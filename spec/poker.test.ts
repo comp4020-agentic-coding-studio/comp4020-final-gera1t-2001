@@ -1685,6 +1685,28 @@ describe.skipIf(!isLocal)("guests at the table (writes test data — local only)
     };
   }
 
+  // Brief 2 Step 12: solo against the house is its own game. A seated table
+  // player who loses a solo hand keeps their table stack. Here, not in
+  // spec/solo.test.ts, because it sits at table 1. It never deals at the table.
+  it("36. a seated table player loses a solo hand; their table stack is unchanged", async () => {
+    const guest = await sit((await guestCookie()).cookie);
+    players = [guest];
+    const tableStack = async (): Promise<number> =>
+      (await getView(guest.cookie)).seats.find((s) => s.userId === guest.userId)!.stack;
+    const before = await tableStack();
+    const post = (path: string, fields: Record<string, string> = {}) =>
+      fetch(new URL(path, baseUrl), {
+        method: "POST",
+        headers: { cookie: guest.cookie, accept: "application/json" },
+        body: new URLSearchParams(fields),
+      });
+    expect((await post("/solo/deal", { ante: "10" })).status).toBe(200);
+    const folded = (await (await post("/solo/fold")).json()) as { last: { net: number }; stack: number; buyIn: number };
+    expect(folded.last.net).toBe(-10); // a fold loses the ante
+    expect(folded.stack).toBe(folded.buyIn - 10); // the solo stack moved...
+    expect(await tableStack()).toBe(before); // ...the table's didn't
+  });
+
   // Owner decision (4 Nov 2026, after Step 11): guests are an animal and two
   // digits, and the animal is one whose avatar letter nobody seated has. Read
   // from the page itself: each seat's avatar letter and name plate.

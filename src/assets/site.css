@@ -223,6 +223,11 @@ select { text-overflow: ellipsis; }
 .hero-cta {
   display: inline-grid; place-items: center; width: auto; padding: 0 1.75rem; text-decoration: none;
 }
+/* Brief 2 Step 12: Play the house beside Take a seat. On the room, so the
+   outline is in the room's text colour, not the paper panels' ink. */
+.hero-ctas { display: flex; flex-wrap: wrap; gap: .75rem; }
+.hero-cta.secondary { color: var(--text); border-color: var(--muted); background: transparent; }
+.hero-cta.secondary:hover { border-color: var(--text); background: rgba(255,255,255,.04); }
 .regulars { padding-top: 1rem; }
 .regulars ul { list-style: none; padding: 0; margin: 0; display: grid; gap: .75rem; }
 .regulars li { border-top: 1px solid var(--line); padding-top: .75rem; }
@@ -243,11 +248,17 @@ select { text-overflow: ellipsis; }
   font: 600 .75rem/1.5 var(--sans); color: var(--muted); vertical-align: .1em;
 }
 #recent tbody.hand + tbody.hand tr:first-child > * { border-top: 2px solid var(--line); }
+/* Against the house's recent hands on a phone: the date's own column wraps to
+   three lines, so it goes, and the result and net share the width. */
+@media (max-width: 640px) {
+  #house-recent th:first-child, #house-recent td:first-child { display: none; }
+}
 
 @media (max-width: 640px) {
   .hero { grid-template-columns: 1fr; gap: 1rem; padding-top: 1.5rem; text-align: center; }
   .mini-table { margin: 1.25rem 1.5rem; }
   .hero-cta { width: 100%; }
+  .hero-ctas { flex-direction: column; }
 }
 
 @media (max-width: 640px) {
