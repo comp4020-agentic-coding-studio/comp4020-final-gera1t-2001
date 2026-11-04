@@ -2473,3 +2473,42 @@ that ends straight from the deal must record results and stacks like any
 other … (2) Owner decision: a player with 0 chips at hand end is stood up
 automatically … (3) Find the root cause of the flaky ghost-seat test and
 fix it; show it passing 20 full runs in a row. Commit, log, and stop."
+
+## 2026-11-04 14:48 — [harness]
+
+**What happened:** The owner kept the test-only stacks route and the
+local-only test 28. They asked for a test that runs in CI and proves the
+route returns 404 there, next to test 5's "no route to add chips", plus
+`TEST_HOOKS=1` documented in `spec/README.md`.
+
+**What I did instead of the obvious thing:**
+- **A request that only a missing route can answer with 404.** The obvious
+  version POSTs an empty body and expects 404. Against a mounted route,
+  an empty or non-JSON body gets 415 or 400, so a test checking for "not
+  200" would pass whether the route existed or not. Test 5b sends what the
+  route accepts (JSON, a seated user, a legal stack), so a mounted route
+  answers 200 and only an absent one answers 404.
+- **Gated on the spec's own flag.** "Is this CI?" can't be told from
+  `APP_URL`: CI also runs on localhost. So 5b skips only when the spec is
+  given `TEST_HOOKS=1`, and runs everywhere else, CI included.
+
+**How I knew it was right:**
+- **No Docker in this sandbox,** so I ran the app the way the image runs
+  it: `NODE_ENV=production`, with `TEST_HOOKS=1` set too, to show the gate
+  holds even then. The server printed no "test hooks are ON", and 5b
+  passed.
+- **Non-vacuous:** against a dev server with the route mounted and the
+  spec not told, 5b went red, "expected 200 to be 404". With the spec told
+  `TEST_HOOKS=1`, 5b skipped.
+- **CI-shaped full run** (`NODE_ENV=production`, default timings, no
+  flag): 59 passed, 2 skipped (28 and 31, which need the route).
+- **Local with hooks:** 60 passed, 1 skipped (5b).
+- **Not verified:** a real CI run on GitHub. The repo isn't pushed before
+  Step 13.
+
+**Citation:** `57a12c9` (`spec/poker.test.ts` test 5b, `spec/README.md`).
+
+**Curated prompt:** "Keep the test-only route and the local-only test.
+Add a test that runs in CI and asserts the test-only route returns 404
+there, next to test 5's 'no route to add chips'. Document TEST_HOOKS=1 in
+spec/README.md. Commit, log, stop."
