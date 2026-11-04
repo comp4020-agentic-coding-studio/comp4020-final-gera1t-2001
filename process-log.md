@@ -2340,3 +2340,45 @@ red → green.
 
 **Curated prompt:** "Read CLAUDE.md, then docs/final-brief-2.md. Commit the
 brief first, then do Step 10 only and stop."
+
+## 2026-11-04 10:58 — [harness]
+
+**What happened:** The owner asked for one small step before Step 11, red
+first: settle a hand that ends at the deal, stand up a player with 0 chips
+at hand end ("<name> is out of chips"), and fix the flaky ghost-seat test.
+Tests 28–30 were added and committed red.
+
+**What I did instead of the obvious thing:**
+- Reaching "both blinds all in" by play takes dozens of hands (at most 20
+  chips change hands per hand from 1000-chip stacks). Rather than a test
+  that plays 100 hands, a test-only route sets stacks between hands:
+  `POST /test-hooks/tables/:id/stacks`. It's mounted only when
+  `TEST_HOOKS=1` and `NODE_ENV !== "production"`. The Dockerfile sets
+  `ENV NODE_ENV=production`, so the image CI tests and Fly runs never has
+  it, and test 28 skips there.
+- The hook went into the red commit, so test 28 fails for the real
+  reason, not for a missing route.
+- Tests 29–30 need no hook: all-in hands bust someone in one or two deals.
+- Engine facts the tests rest on (scratch script against 1.0.20): stacks
+  5 and 10 at blinds 5/10 end at `SHOWDOWN` straight out of `deal()`, with
+  stacks 0/15, sum conserved; the loser is left at 0 with status ALL_IN.
+
+**How I knew it was right:**
+- Red against a scratch server (`TEST_HOOKS=1`, short timings), each for
+  its own reason: 28 "expected [] to deeply equal [1, 2]" (no
+  `hand_results` rows); 29 the busted player still seated; 30 the sit
+  refused (still seated).
+- The flake's red evidence is not a committed test: an 800 ms delay
+  injected into the presence timer (scratch edit, never committed) made
+  ghost test 3 fail 3/3 with "expected 4968–4974 to be ≤ 4000", the same
+  signature as the original "4964".
+
+**Citation:** `c665585` (`spec/poker.test.ts`, `src/server.ts`,
+`src/poker/table.ts`).
+
+**Curated prompt:** "Before Step 11, one small step, red first. (1) A hand
+that ends straight from the deal must record results and stacks like any
+other … (2) Owner decision: a player with 0 chips at hand end is stood up
+automatically, with a notice "<name> is out of chips" … (3) Find the root
+cause of the flaky ghost-seat test and fix it; show it passing 20 full runs
+in a row. Commit, log, and stop."
