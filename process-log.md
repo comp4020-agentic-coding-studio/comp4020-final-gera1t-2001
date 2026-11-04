@@ -2512,3 +2512,116 @@ route returns 404 there, next to test 5's "no route to add chips", plus
 Add a test that runs in CI and asserts the test-only route returns 404
 there, next to test 5's 'no route to add chips'. Document TEST_HOOKS=1 in
 spec/README.md. Commit, log, stop."
+
+## 2026-11-04 21:37 — [judgement]
+
+**What happened:** Step 11, the guest door. One tap makes a signed-in
+guest; the profile's Claim this account turns it into a registered account
+with the same id; a guest's Log out warns first; forgot password treats a
+guest like an unknown username; Results tags guests. ADR 0005 drafted with
+the Decision left to the owner. The Opus review of my first version found
+two must-fix holes, both reproduced before fixing.
+
+**What I did instead of the obvious thing:**
+- **One claim form, not a second copy of registration.** The register
+  page's "Your login" and "If you forget your password" fieldsets became
+  functions (`loginFieldset`, `recoveryFieldset` in
+  `src/account-pages.ts`). Both `/register` and the claim panel use them,
+  and both are checked by `registerErrors`. So a field's error lands in the
+  same `aria-describedby` target on both pages, as brief 1 Step 6 required.
+- **Claiming keeps the user id.** It updates `username`, `password_hash`
+  and `is_guest` in place `WHERE is_guest = 1`, and writes the questions in
+  the same transaction. Seat, stack and `hand_results` stay without being
+  touched. A username taken between the check and the write hits the unique
+  constraint, and the page shows the same "taken" message on the same field.
+- **Review fix M1, cross-site POSTs.** The cookie is `SameSite=Lax`, so a
+  cross-site form POST to `/guest` arrives signed out. It made a new guest
+  whose `Set-Cookie` replaced the visitor's, and `/logout` deleted it. For a
+  guest that is permanent loss. Fixed with one middleware that refuses any
+  POST whose `Sec-Fetch-Site` is present and isn't `same-origin` or `none`.
+  - Not hono's `csrf()`. Its source (`hono/dist/middleware/csrf/index.js`,
+    as the reviewer read it) refuses a form POST that has neither header,
+    which would break the spec's fetches. It also compares `Origin` with
+    `c.req.url`, which is `http://` behind Fly's TLS.
+- **Review fix M2, `safeNextPath`.** `next=/\t/evil.example/x` passed
+  (starts with `/`, not `//`), and browsers drop the tab and follow
+  `//evil.example`. `next=/\n/evil` gave a 500 after the guest was created.
+  - It now refuses any control character or backslash, then parses the
+    value against a fixed base and requires the origin to be unchanged.
+    `/login` and `/register` share the function, so they're fixed too.
+- **Should-fixes taken:**
+  - A double-tapped claim re-reads the user after the body is parsed, so it
+    doesn't report "username taken" for its own success.
+  - IPv6 is keyed by /64.
+  - The limiter's sweep runs at most once a minute.
+  - A malformed `GUEST_LIMIT` fails the boot instead of becoming NaN, which
+    would turn the limit off.
+  - Home's Regulars leaves unclaimed guests out.
+  - The header's guest name reads as a label ("as Guest 0412"), grouped
+    with Claim account and Log out.
+- **The brief's "no second constant".** My first version added
+  `GUEST_SESSION_LIFETIME_MS` beside the parameter. The reviewer flagged it
+  as the very second constant the brief warns against. Removed: POST /guest
+  passes `SESSION_LIFETIME_MS` explicitly.
+- **Not acted on:**
+  - The seat plate truncating to "Guest …" on a phone (S4). The brief says
+    the table's look stays as deployed. It's the owner's call, and noted
+    here.
+  - A sliding guest session (S1). The brief says 30 days, so the ADR now
+    says plainly that a guest's session ends at day 30, used or not.
+- **Rate-limit test via a per-test `Fly-Client-IP`, not a shortened limit.**
+  The default 10 is used, so the limit test also runs in CI. Every other
+  guest test sends its own made-up address, so tests never share localhost's
+  budget. The window-expiry test needs a short `GUEST_LIMIT_WINDOW_MS`, and
+  skips without one.
+
+**How I knew it was right:**
+- **`pnpm check` with short overrides and `TEST_HOOKS=1`, fresh DB:** 75
+  passed, 1 skipped (5b, by design).
+- **CI-shaped run** (`NODE_ENV=production`, no overrides, fresh DB): 73
+  passed, 3 skipped (28 and 31 need hooks; the window-expiry test needs a
+  short window). The server log shows `event=action_rejected route=guest
+  status=429 reason=rate_limited`.
+- **Red before green for the review fixes.** Against the unfixed server:
+  - the control-character test got "expected 'http://evil.example' to be
+    'http://localhost:8112'";
+  - the cross-site test got "/guest: expected 303 to be 403".
+  - Both are green after the fix.
+  - An earlier red of the first test came from my own test (a `JSON.parse`
+    of a literal tab) and was fixed before I counted it.
+- **Deliberate breaks, each restored and `cmp`'d:**
+  - guests treated as recoverable → only the forgot-password test red;
+  - rate limit off → only the two limit tests red;
+  - claim leaving `is_guest = 1` → test 34 red;
+  - no Results tag → test 34 red.
+- **Real-browser cross-site check** (`/tmp/csrf11.mjs`): a page on
+  127.0.0.1:8199 auto-submits to `/guest` and `/logout`. With the guard,
+  both get 403 and the guest's session is kept. With the guard disabled (a
+  scratch edit, restored and `cmp`'d), both get 303 and the session is lost.
+- **Two-viewport walk, headless Chromium at 1920×1080 and 390×844**
+  (`/tmp/s11walk/walk.mjs`). 19 DOM checks pass at each size, with no
+  console errors and no horizontal overflow:
+  - invite link to a seat in two taps;
+  - claim with the live checklist ticking all five rules;
+  - display name kept, still seated after claiming;
+  - the logout page reached and used by keyboard only, tab order "Claim it
+    first" then "Log out anyway";
+  - the 429 message focused on the register page.
+  - I looked at the screenshots.
+  - Two harness problems were found and fixed along the way, neither of
+    them app bugs. The made-up IP header was being sent to Google Fonts,
+    which failed CORS. And 401s came from a table page whose cookie my
+    loop had cleared; I confirmed the URL before calling it noise.
+- **Not verified:**
+  - production;
+  - a real phone;
+  - whether Fly's proxy replaces a `Fly-Client-IP` the client sends (the
+    ADR says so; checkable in Step 13);
+  - the double-tap claim race, which is reasoned from the code, not
+    reproduced.
+
+**Citation:** `d724e3a`. Tests "a next with control characters…" and "a
+cross-site POST to /guest or /logout…" red → green.
+
+**Curated prompt:** "Read CLAUDE.md, then docs/final-brief-2.md. Step 10
+and its follow-ups are done. Do Step 11 only and stop."
