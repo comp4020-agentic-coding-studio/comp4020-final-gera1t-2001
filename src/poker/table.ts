@@ -598,6 +598,21 @@ export function leave(tableId: number, userId: number): void {
   schedulePresenceCheck(tableId);
 }
 
+// Test-only (brief 2 step 10b): sets seated stacks between hands, so a test
+// can reach states real play takes dozens of hands to reach (both blinds all
+// in). Only src/server.ts's /test-hooks route calls it, and that route is
+// only mounted outside production; see there. Refuses mid-hand.
+export function setStacksForTest(tableId: number, stacks: Map<number, number>): void {
+  requireTable(tableId);
+  if (handInProgress(tableId)) throw new PokerError("A hand is in progress.");
+  for (const [userId, stack] of stacks) {
+    if (!Number.isInteger(stack) || stack < 0) throw new PokerError("Stacks are whole numbers, 0 or more.");
+    db.prepare("UPDATE seats SET stack = ? WHERE table_id = ? AND user_id = ?").run(stack, tableId, userId);
+  }
+  logEvent("test_hook_stacks", { table: tableId, users: [...stacks.keys()].join(",") });
+  notifyTable(tableId);
+}
+
 // --- Turn deadline persistence -----------------------------------------
 
 // Final brief Step 4: a turn that starts for an away player waits

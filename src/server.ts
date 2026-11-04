@@ -45,6 +45,7 @@ import {
   leave,
   markPresent,
   restoreSchedulersOnBoot,
+  setStacksForTest,
   sitDown,
   startHand,
   subscribeToTable,
@@ -797,6 +798,29 @@ app.post("/tables/:id/act", async (c) => {
   }
   return c.json(buildView(tableId, user.id));
 });
+
+// Test hooks (brief 2 step 10b): routes the spec uses to reach states real
+// play can't reach quickly. Mounted only when BOTH TEST_HOOKS=1 is set AND
+// NODE_ENV isn't "production". The Dockerfile sets NODE_ENV=production for
+// the image that CI tests and Fly runs, so neither ever has these routes,
+// whatever else is set: there they 404 like any unknown path. Locally, start
+// the app with TEST_HOOKS=1 to run the tests that need them; without it they
+// skip themselves.
+export const TEST_HOOKS_ENABLED = process.env.TEST_HOOKS === "1" && process.env.NODE_ENV !== "production";
+if (TEST_HOOKS_ENABLED) {
+  console.log("test hooks are ON: /test-hooks/* routes are mounted (never in production)");
+  app.post("/test-hooks/tables/:id/stacks", async (c) => {
+    const tableId = tableIdParam(c);
+    if (tableId === undefined) return c.notFound();
+    const body = (await c.req.json()) as Record<string, number>;
+    try {
+      setStacksForTest(tableId, new Map(Object.entries(body).map(([userId, stack]) => [Number(userId), stack])));
+    } catch (err) {
+      return c.json({ error: pokerErrorMessage(err) }, 400);
+    }
+    return c.json({ ok: true });
+  });
+}
 
 const port = Number(process.env.PORT ?? 8080);
 serve({ fetch: app.fetch, port, hostname: "0.0.0.0" }, (info) => {

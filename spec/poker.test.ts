@@ -126,7 +126,8 @@ interface TableView {
   nextHandAt?: string | null;
   // Final brief Step 4: who was just stood up for being away, so the page
   // can say why a seat emptied.
-  notice?: { type: string; players: { userId: number; displayName: string }[] } | null;
+  // Brief 2 step 10b: each player carries why they were stood up.
+  notice?: { type: string; players: { userId: number; displayName: string; reason?: string }[] } | null;
   you: number | null;
   version: number;
   seq: number;
@@ -1452,5 +1453,117 @@ describe.skipIf(!isLocal)("showdown for everyone, and no dead time (writes test 
     players = [await registerAndSit(), await registerAndSit()];
     const dealt = await startHand(players[0].cookie);
     expect(dealt.turnSeconds).toBe(TURN_TIMEOUT_SECONDS);
+  });
+});
+
+// Brief 2 step 10b (owner, 4 Nov): a hand that ends straight from the deal
+// settles like any other, and a player left with 0 chips at hand end is stood
+// up with a notice. Here because every test plays on table 1.
+describe.skipIf(!isLocal)("settling every hand, and busting out (writes test data — local only)", () => {
+  let players: Player[] = [];
+
+  afterEach(async () => {
+    await cleanupTable(players);
+    players = [];
+  });
+
+  // Sets seated stacks directly, between hands. The route exists only when
+  // the app runs with TEST_HOOKS=1 and NODE_ENV isn't production (see
+  // src/server.ts); the Docker image sets NODE_ENV=production, so in CI this
+  // reports false and the test that needs it skips itself.
+  async function setStacks(stacks: Record<number, number>): Promise<boolean> {
+    const res = await fetch(new URL(`/test-hooks/tables/${TABLE_ID}/stacks`, baseUrl), {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(stacks),
+    });
+    if (res.status === 404) return false;
+    if (!res.ok) throw new Error(`setStacks failed: ${res.status}`);
+    return true;
+  }
+
+  async function resultsFor(cookie: string): Promise<{ userId: number; net: number; endedAt: string }[]> {
+    const res = await fetch(new URL(`/tables/${TABLE_ID}/results`, baseUrl), { headers: { cookie } });
+    return res.json();
+  }
+
+  it("28. a hand that ends straight from the deal records results and stacks, and conserves chips", async (ctx) => {
+    players = [await registerAndSit(), await registerAndSit()];
+    const [alice, bob] = players;
+    // Both blinds all in: 5 and 10 at blinds 5/10. Whichever seat is the
+    // button posts the small blind heads-up, so give both seats a stack no
+    // bigger than its blind either way round.
+    if (!(await setStacks({ [alice.userId]: 5, [bob.userId]: 5 }))) return ctx.skip();
+    const before = await getView(alice.cookie);
+    const totalBefore = before.seats.reduce((sum, s) => sum + s.stack, 0);
+    expect(totalBefore).toBe(10);
+    const rowsBefore = (await resultsFor(alice.cookie)).length;
+
+    const dealt = await startHand(alice.cookie);
+    expect(dealt.hand!.winners).not.toBeNull(); // over before anyone acts
+
+    const after = await getView(alice.cookie);
+    const rows = (await resultsFor(alice.cookie)).slice(rowsBefore);
+    // One row per player, one shared ended_at, nets summing to 0.
+    expect(rows.map((r) => r.userId).sort()).toEqual([alice.userId, bob.userId].sort());
+    expect(new Set(rows.map((r) => r.endedAt)).size).toBe(1);
+    expect(rows.reduce((sum, r) => sum + r.net, 0)).toBe(0);
+    // Stacks written back: what's seated now (a buster stands up with 0, so
+    // count them as 0) sums to what went in, and matches each net.
+    const stackNow = (userId: number) => after.seats.find((s) => s.userId === userId)?.stack ?? 0;
+    expect(stackNow(alice.userId) + stackNow(bob.userId)).toBe(totalBefore);
+    for (const p of players) {
+      expect(stackNow(p.userId)).toBe(5 + rows.find((r) => r.userId === p.userId)!.net);
+    }
+  });
+
+  // Plays all-in hands (raise to everything, call) until someone has 0. A
+  // split pot leaves both with chips, so it deals again.
+  async function bustSomeone(): Promise<{ loser: Player; winner: Player; ended: TableView }> {
+    for (let tries = 0; tries < 6; tries++) {
+      let view = await startHand(players[0].cookie);
+      for (let guard = 0; guard < 6 && view.hand!.winners === null; guard++) {
+        const actor = players.find((p) => p.seatNo === view.hand!.actionTo)!;
+        const me = view.hand!.players[actor.seatNo]!;
+        const owed = Math.max(...view.hand!.players.map((p) => p?.betThisStreet ?? 0)) - me.betThisStreet;
+        if (owed > 0 && owed >= me.stack) view = await act(actor.cookie, "call");
+        else if (owed > 0) view = await act(actor.cookie, "raise", me.betThisStreet + me.stack);
+        else view = await act(actor.cookie, "bet", me.stack);
+      }
+      expect(view.hand!.winners).not.toBeNull();
+      const loserSeat = view.hand!.players.find((p) => p !== null && p.stack === 0)?.seat;
+      if (loserSeat === undefined) continue; // split: deal again
+      const loser = players.find((p) => p.seatNo === loserSeat)!;
+      return { loser, winner: players.find((p) => p !== loser)!, ended: view };
+    }
+    throw new Error("nobody busted in 6 all-in hands");
+  }
+
+  it("29. a player with 0 chips at hand end is stood up, with a notice that says so", async () => {
+    players = [await registerAndSit(), await registerAndSit()];
+    const { loser, winner, ended } = await bustSomeone();
+    // In the response to the action that ended the hand, and after.
+    for (const view of [ended, await getView(winner.cookie)]) {
+      expect(view.seats.find((s) => s.userId === loser.userId)).toBeUndefined();
+      const gone = view.notice?.players.find((p) => p.userId === loser.userId);
+      expect(gone?.reason).toBe("out_of_chips");
+    }
+    // The page says it in words, for everyone at the table.
+    const res = await fetch(new URL(`/tables/${TABLE_ID}`, baseUrl), { headers: { cookie: winner.cookie } });
+    const doc = new JSDOM(await res.text()).window.document;
+    const notice = doc.querySelector(`.table-notice [data-out-of-chips="${loser.userId}"]`);
+    expect(notice).not.toBeNull();
+    expect(doc.querySelector(".table-notice")!.textContent).toContain(`${loser.username} is out of chips.`);
+    // The winner holds everything: conservation across the bust.
+    expect(ended.seats.find((s) => s.userId === winner.userId)!.stack).toBe(2 * ended.table.buy_in);
+  });
+
+  it("30. sitting again after busting gives the fixed buy-in", async () => {
+    players = [await registerAndSit(), await registerAndSit()];
+    const { loser } = await bustSomeone();
+    const res = await fetch(new URL(`/tables/${TABLE_ID}/sit`, baseUrl), { method: "POST", headers: { cookie: loser.cookie } });
+    expect(res.status).toBe(200);
+    const view = (await res.json()) as TableView;
+    expect(view.seats.find((s) => s.userId === loser.userId)!.stack).toBe(view.table.buy_in);
   });
 });
