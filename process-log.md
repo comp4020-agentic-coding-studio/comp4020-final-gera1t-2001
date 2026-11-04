@@ -2709,3 +2709,156 @@ guests at one table are told apart, and that each avatar letter comes from
 the animal. (2) Guest sessions slide: … under 15 days left, extend it to 30
 days from now. Update ADR 0005's Consequences to match. Tests for both.
 Commit, log, stop."
+
+## 2026-11-04 23:28 — [routine]
+
+**What happened:** Step 12's red commit. `spec/solo.test.ts` states the
+solo promises against routes that don't exist yet, and `src/solo/rules.ts`
+is the pure rules module (on `@pokertools/evaluator`, added and pinned to
+1.0.20) the tests recompute settlements with.
+
+**What I did instead of the obvious thing:**
+- **Library claims read from source first** (`node_modules/.pnpm/
+  @pokertools+evaluator@1.0.20/.../dist`):
+  - `index.d.ts`, `evaluate`: "Returns a strength score (lower is better)."
+  - `models/hand-rank.d.ts:5`: "export declare const enum HandRank {
+    StraightFlush = 0, … HighCard = 8 }". No royal category.
+  - `index.js:55`: `rank(codes)` takes card codes, so strings go through
+    `getCardCodes` first.
+  - Probed: 4-4-5-3-2 scores 5745; 3-3-A-K-Q 5746 (doesn't qualify);
+    4-4-6-3-2 5744; a royal 1 (the best score); a 5-high straight flush 10.
+- **The brief's boundary hands are five-card hands.** As seven-card dealer
+  hands they can't happen exactly, because two more cards pair up or
+  improve them. So the three exact hands are pure tests, and the
+  fixed-deck tests use the nearest real seven-card cases: 3-3 with A-K-Q
+  high (5746, doesn't qualify) and the weakest pair of fours, 4-4-8-7-6
+  (5726, qualifies). Every fixture deck was run through the evaluator
+  before I relied on it.
+- **No hook where none is needed.** The net-recompute test reads the stored
+  cards from a signed-in `GET /solo/hands` (your own settled hands only),
+  and the bust test reaches a bust with maximum-ante calls. Both run in CI.
+  Only the fixed deck needs a test-only route.
+
+**How I knew it was right:** against the current build, the 24 HTTP tests
+fail, each for a missing route (grouped: 404s from `/solo/view`, `/solo`,
+the deck hook). The 5 pure tests pass. The `SyntaxError` one test showed was
+a 404 body parsed as JSON; the helper now reports the status instead.
+
+**Citation:** `eefec87`.
+
+**Curated prompt:** "Do Step 12 only and stop."
+
+## 2026-11-05 00:37 — [judgement]
+
+**What happened:** Step 12's fix. Casino Hold'em against the house: its own
+stack, storage, page, routes and Results section; home gets Play the house.
+The Opus review of my first version found three must-fix problems. All were
+real, and all are fixed with tests that go red on the reviewed code.
+
+**What I did instead of the obvious thing:**
+- **One card renderer across two pages, by import, not a copy.**
+  `src/solo/render.js` imports `cardHtml` from `../poker/render.js`. The
+  browser can't resolve that path against `/assets/`, so `src/solo/page.ts`
+  rewrites that one import line, when serving, to the table renderer's own
+  versioned URL. Boot fails if the line isn't there exactly once.
+  - The card and dock CSS became named pieces of `TABLE_STYLE` instead of
+    copies. I proved `TABLE_STYLE` byte-identical to the committed one with
+    `cmp`, after a first hash comparison showed a difference that turned out
+    to come from how I'd captured the "before" (a dropped trailing newline).
+- **A session is told by hand id, not by the clock** (review M1). My first
+  version showed the last hand if `ended_at >= stack.started_at`. A bust
+  writes the busting hand and the new stack in the same millisecond, so:
+  - the busting hand showed on the fresh stack after a reload;
+  - the response itself hid it;
+  - without JavaScript, "You're out" never appeared.
+  - Now: `solo_stacks.after_hand_id` marks where a session starts, and
+    `busted_hand_id` keeps the notice and the busting hand on the felt
+    until the next deal, in the database, so the 303-then-GET flow shows it
+    too.
+- **The net recompute is independent** (review S1). It used the server's
+  own `settle()`, so a wrong rule would agree with itself. The test now
+  scores with `evaluateStrings`/`rank` directly against a paytable written
+  out in the test, as the brief says ("recomputed in the test … with the
+  evaluator").
+- **The table-stack test moved to `spec/poker.test.ts`** (review M2, as
+  test 36). It sits at table 1, and the working rule exists because a
+  second file on table 1 turned 13 tests red on 22 Oct.
+- **Also from the review:**
+  - cashing out of an untouched stack records no session;
+  - a same-kind win reads "Your pair beats the dealer's pair";
+  - a royal is named;
+  - the result is announced through a live region that stays in the page;
+  - a stale second tab re-fetches the view on a 400;
+  - the no-JS error has a parameter instead of a string replace;
+  - Call/Fold fill their columns on a phone;
+  - the phone's recent-hands table drops its date column.
+
+**Corrections to the red entry (`eefec87`):**
+- The weakest seven-card pair of fours is 4-4-8-7-5-3-2, score **5727**,
+  not 4-4-8-7-6 (5726). The reviewer found it and I confirmed it by
+  brute force. The fixture is fixed.
+- The const enum: `HandRank` does exist at runtime (`hand-rank.js` builds
+  it; `node` prints `HandRank.Flush = 3`). The obstacle is tsc with this
+  repo's `verbatimModuleSyntax`: "TS2748: Cannot access ambient const
+  enums when 'verbatimModuleSyntax' is enabled", reproduced. The
+  `rules.ts` header now says so.
+- The quoted doc comment was `evaluate`'s. `evaluateStrings`' own is
+  "Evaluates an array of card strings (e.g. ['As', 'Kd', ...]). Slightly
+  slower than `evaluate` due to parsing overhead."
+
+**Every write to `seats` and `solo_stacks`** (grep of INSERT/UPDATE/DELETE):
+- `seats`, only in `src/poker/table.ts`:
+  - sit, INSERT at the buy-in (:586);
+  - leave, DELETE (:620);
+  - the test-only stacks hook, UPDATE (:644, never in production);
+  - hand settlement, UPDATE (:671);
+  - plus migrations 0004/0005's one-off deletes.
+- `solo_stacks`, only in `src/solo/game.ts`:
+  - `ensureStack`, INSERT at the buy-in, the only place solo chips are
+    created;
+  - `settleHand`, UPDATE `stack + net`;
+  - `dealHand`, UPDATE `busted_hand_id = NULL` (no chips);
+  - `endSession`, DELETE.
+- No file writes both. `game.ts` mentions `seats` only in a comment.
+
+**How I knew it was right:**
+- **`pnpm check` with short overrides and `TEST_HOOKS=1`, fresh DB:** 116
+  passed, 2 skipped (5b and the deck-hook-absent test, by design).
+- **CI-shaped run** (`NODE_ENV=production`; the app also given
+  `TEST_HOOKS=1`, and printed no "hooks are ON"): 98 passed, 20 skipped.
+  The deck-hook-absent test ran: 404 for a valid deck request.
+- **The review's M1 reproduced, then the new tests red on it.** I rebuilt
+  the reviewed code from its saved diff in a scratch worktree (removed
+  after) and ran the new tests against it: "expected undefined to be -999"
+  (busting hand missing) and "expected null to be 'You're out…'" (no-JS
+  notice).
+- **Deliberate breaks, each restored and `cmp`'d:**
+  - no ante cap → only the ante test red (never-negative stays green: the
+    CHECK and the settle guard still hold);
+  - no royal → the pure and fixed-deck royal tests red;
+  - `<` for `<=` in qualifying → the boundary test red;
+  - dealer cards in `live` → the leak test red ("Td leaked");
+  - call paying 1:1 short → four tests red;
+  - solo writing `seats` → the table-stack test red.
+- **Headless Chromium at 1920×1080 and 390×844**
+  (`/tmp/s12walk/walk.mjs`): 29 DOM checks pass at each size, with no
+  console errors (only the walk's deliberate 400 excused) and no
+  horizontal overflow. They cover:
+  - presets 25 and Max, a fold, a losing call ("Dealer wins. −30"), a
+    winning call ("Four of a kind beats a pair. +120"), and a dealer who
+    doesn't qualify ("Ante pays 2:1. +20");
+  - a bust, with the busting hand, the notice announced and kept after a
+    reload;
+  - a cash-out, keyboard-only Deal, and the over-maximum message;
+  - `/results` showing Table then Against the house.
+  - I looked at the screenshots.
+  - My walk's first red run was the harness, not the app: its "wait for the
+    HTML to change" missed renders that landed before its snapshot. A
+    direct trace showed the page working; the wait now counts renders.
+- **Not verified:** production, a real phone, and a real screen reader
+  reading the live region.
+
+**Citation:** `eefec87` (red) → `88e6e8e` (green): the 24 HTTP solo tests
+red → green; the two bust tests red on the reviewed code → green.
+
+**Curated prompt:** "Do Step 12 only and stop."
