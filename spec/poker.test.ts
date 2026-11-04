@@ -501,6 +501,26 @@ describe.skipIf(!isLocal)("poker (writes test data — local only)", () => {
     expect(res.status).toBe(404);
   });
 
+  // Brief 2 step 10b: the test-only route that sets stacks
+  // (POST /test-hooks/tables/:id/stacks) must not exist in the build that
+  // ships. CI runs the Docker image, which sets NODE_ENV=production, so the
+  // route is never mounted there; this runs in CI to prove it. It runs
+  // whenever the spec isn't told TEST_HOOKS=1 (see spec/README.md), and skips
+  // only on a local run that asked for the route. The request is otherwise
+  // valid (JSON, a seated user, a legal stack), so a mounted route would
+  // answer 200, not 404: the 404 can only mean the route isn't there.
+  it.skipIf(process.env.TEST_HOOKS === "1")(
+    "5b. the test-only route that sets stacks doesn't exist in this build",
+    async () => {
+      const res = await fetch(new URL(`/test-hooks/tables/${TABLE_ID}/stacks`, baseUrl), {
+        method: "POST",
+        headers: { "content-type": "application/json", cookie: alice.cookie },
+        body: JSON.stringify({ [alice.userId]: 1000 }),
+      });
+      expect(res.status).toBe(404);
+    },
+  );
+
   it("6. a hand's results are recorded and still readable after the request that ended it", async () => {
     const dealt = await startHand(alice.cookie);
     const actor = dealt.hand!.actionTo === alice.seatNo ? alice : bob;
