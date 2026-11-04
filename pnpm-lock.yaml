@@ -14,6 +14,9 @@ importers:
       '@pokertools/engine':
         specifier: 1.0.20
         version: 1.0.20(@pokertools/evaluator@1.0.20)(@pokertools/types@1.0.20)
+      '@pokertools/evaluator':
+        specifier: 1.0.20
+        version: 1.0.20
       better-sqlite3:
         specifier: ^13.0.3
         version: 13.0.3
