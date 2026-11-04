@@ -10,6 +10,11 @@
 // e.g. `SHOWDOWN_PAUSE_MS=2000 node src/server.ts` in one shell and
 // `SHOWDOWN_PAUSE_MS=2000 pnpm check` in the other. CI sets none of them.
 //
+// The guest door's rate limit (brief 2 Step 11) is set the same way, and
+// lives with the other account rules in src/account-messages.ts:
+//
+//   GUEST_LIMIT, GUEST_LIMIT_WINDOW_MS
+//
 // Not a timing but set the same way: TEST_HOOKS=1 (brief 2 step 10b) mounts
 // the /test-hooks routes (src/server.ts; never with NODE_ENV=production, so
 // never in the Docker image) and tells the spec they must be there. Without

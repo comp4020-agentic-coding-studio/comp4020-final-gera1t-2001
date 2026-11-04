@@ -65,6 +65,13 @@ select { text-overflow: ellipsis; }
   font: inherit; color: var(--muted); background: none; border: 0; padding: 0; cursor: pointer;
 }
 .site-nav button:hover { color: var(--text); }
+/* A guest's name in the header, and the way to keep the account. One group,
+   so it wraps as a unit on a phone; the name is a label ("as Guest 0412"),
+   not one more link. */
+.site-nav .guest-group { display: inline-flex; flex-wrap: wrap; align-items: baseline; gap: .25rem 1rem; }
+.site-nav .guest-as { color: var(--muted); font-size: .875em; margin-right: -.7rem; }
+.site-nav .guest-name { color: var(--muted); font-style: italic; }
+.site-nav a.claim-link { color: var(--brass); }
 /* The connection pill (final brief Step 3): a dot coloured by state. */
 .conn { display: inline-flex; align-items: center; gap: .4rem; font-size: .875rem; color: var(--muted); }
 .conn::before { content: ""; flex: none; width: .55rem; height: .55rem; border-radius: 50%; background: var(--ok); }
@@ -123,6 +130,21 @@ select { text-overflow: ellipsis; }
   background: var(--brass); border: 0; border-radius: .7rem; cursor: pointer;
 }
 .primary:hover { filter: brightness(1.05); }
+/* The quieter of two buttons (brief 2 Step 11): Play as a guest, Log out
+   anyway. Same size as .primary, outlined in ink on paper. */
+.secondary {
+  width: 100%; min-height: 3.25rem; font: 700 1.05rem var(--sans); color: var(--ink);
+  background: transparent; border: 2px solid var(--ink); border-radius: .7rem; cursor: pointer;
+}
+.secondary:hover { background: rgba(0,0,0,.05); }
+.guest-door { margin-top: 1rem; }
+.guest-door .why { margin: .6rem 0 0; font-size: .9rem; text-align: center; }
+.guest-door .summary { margin-bottom: .75rem; }
+/* Log out? for a guest: a link styled as the primary button, then the form. */
+.choices { display: grid; gap: .75rem; }
+.choices a.primary { display: grid; place-items: center; text-decoration: none; color: var(--brass-ink); }
+.claim { margin-bottom: .5rem; }
+.panel .claim h2 { margin-top: .75rem; }
 .links { margin: 1.25rem 0 0; display: grid; gap: .4rem; text-align: center; color: var(--ink-2); }
 .links a { color: var(--ink); font-weight: 700; }
 
@@ -215,6 +237,11 @@ select { text-overflow: ellipsis; }
 .ledger .num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
 .ledger .neg { color: #f0857e; } /* --red lifted for contrast on the room */
 .ledger tr.you th { color: var(--brass); }
+/* An unclaimed guest's tag on Results. */
+.tag {
+  display: inline-block; margin-left: .35rem; padding: 0 .4rem; border: 1px solid var(--line); border-radius: .3rem;
+  font: 600 .75rem/1.5 var(--sans); color: var(--muted); vertical-align: .1em;
+}
 #recent tbody.hand + tbody.hand tr:first-child > * { border-top: 2px solid var(--line); }
 
 @media (max-width: 640px) {

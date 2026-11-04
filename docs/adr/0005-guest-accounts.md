@@ -1,0 +1,105 @@
+# ADR 0005: Guest accounts
+
+## Status
+
+Proposed. The Decision section is the owner's. Number 0004 is reserved for
+the ghost-seat ADR the owner still owes.
+
+## Context
+
+The door to the table is registration: a username, a password that must meet
+five rules, and two security questions with answers. For a friend opening an
+invite link on a phone, that is a lot to fill in before seeing a single card.
+Several friends at a home game might give up at that form.
+
+The security questions are an owner decision from C8 (`docs/c8-brief.md`):
+"A user who forgot their password can reset it by answering the security
+questions they set at registration (no email, no phone number). This is a
+deliberate, owner-made choice: do not replace it with another recovery
+method or argue it away; …" They are the only way back into an account whose password is lost.
+Any lighter door has to live with that: an account without questions has no
+recovery at all.
+
+The stakes are low. Chips are play chips with a fixed buy-in, and a lost
+account loses only its name, its seat and its line on Results. But Results
+is the one place a player's history is kept, and an account nobody can get
+back into still shows there.
+
+Brief 2 (4 Nov 2026) asks for guest accounts and for this ADR. As built in
+Step 11:
+
+- **Play as a guest** on `/login` and `/register` (`POST /guest`) makes a
+  signed-in account in one tap: username `guest-` plus 6 random lowercase
+  base32 characters, display name "Guest " plus 4 digits, a password hash of 32 random
+  bytes nobody knows, no security questions, `users.is_guest = 1`
+  (migration 0006). The session lasts 30 days.
+- At most 10 guests per IP per hour (an IPv6 address counts by its /64),
+  counted in memory.
+- Form POSTs that a browser marks as cross-site (`Sec-Fetch-Site`) are
+  refused, so another site can't replace or delete a guest's cookie.
+- The header shows a guest's name and **Claim account**. The profile's
+  **Claim this account** panel takes the register page's username, password
+  and question fields, checked by the same `registerErrors`. Claiming keeps
+  the user id, so seat, stack and `hand_results` stay, and sets `is_guest`
+  to 0.
+- Log out for a guest goes to a warning page first: "You're a guest. If you
+  log out you can't get back into this account."
+- Forgot password treats a guest username exactly like an unknown one.
+- Unclaimed guests show on Results tagged "guest". There is no cleanup job.
+
+## Options
+
+- **A. No guests (as before Step 11).** Every player registers in full.
+  Every account can be recovered with its questions. The friction at the
+  door stays where it is.
+- **B. Guests with a claim path (as built).** One tap to a seat. Recovery is
+  given up only for accounts that never claim. Anyone who wants recovery
+  gets it by claiming, under the same rules as registering. The C8 decision
+  still holds for every account with a password.
+- **C. A lighter registration for everyone**, e.g. username and password
+  with the questions optional, or a weaker password rule. Less friction for
+  everyone, but it changes the C8 recovery decision for every account, not
+  just for people who choose to skip it. The brief's Owner decisions don't
+  allow that.
+- **D. A shared link token instead of accounts** (anyone with the invite
+  link plays as a named seat). No account at all, so no Results history, no
+  profile, and anyone the link reaches can take the seat.
+
+## Decision
+
+*(The owner's to write.)*
+
+## Consequences
+
+What B costs, against what it buys:
+
+- **Recovery versus friction at the door.** A guest who loses the cookie
+  (cleared site data, a private window, another device, logging out anyway)
+  loses the account for good. The app offers no way to restore it: the
+  password hash has no password behind it, there are no questions, and
+  recovery for a guest username behaves like an unknown username on purpose,
+  so it reveals nothing. Only someone with access to the database could
+  bring it back, by hand.
+- **The session ends at 30 days, used or not.** A session's expiry is set
+  when it is made and never extended, for everyone. For a registered player
+  that means logging in again; for a guest it is the same permanent loss. The warning page and the header's Claim account
+  link are the only protection. In return, the C8 rule is untouched for
+  everyone who claims or registers.
+- **Orphaned guests pile up.** No cleanup job (out of scope in brief 2), so
+  every abandoned guest stays in `users` and on Results with its tag (the
+  home page's Regulars leaves unclaimed guests out). The rate limit bounds
+  how fast one address adds them: 10 per IP (or IPv6 /64) per hour, 240 a
+  day; someone with many addresses gets that many budgets. It is in memory, so a restart resets it. Behind a
+  shared network (a dorm, a phone carrier's NAT), friends share one budget.
+  Brief 2 asked that the owner's postponed account wipe consider guests.
+- **A seated guest who disappears** is handled like anyone else: away after
+  10 s, stood up by the ghost-seat rules. Their seat is not held for them.
+- **The rate limit trusts `Fly-Client-IP`.** On Fly the proxy sets it. Off
+  Fly (localhost, CI), any client can set it, which is how the spec gives
+  each test its own budget. If the app ever ran somewhere without Fly's
+  proxy in front, the limit would be trivial to step around. That Fly's
+  proxy replaces a header the client sent is assumed here, not yet checked
+  against the deployed app.
+- **Claiming reuses registration**, so the two can't drift apart: the same
+  rules, messages and field mapping (`registerErrors`, `MESSAGES`) and the
+  same fieldsets in `src/account-pages.ts`.

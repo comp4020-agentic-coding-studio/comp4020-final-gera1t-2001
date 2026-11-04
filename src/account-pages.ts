@@ -9,6 +9,7 @@ import {
   RECOVERY_QUESTIONS,
 } from "./account-messages.ts";
 import type { FormError } from "./account-messages.ts";
+import type { User } from "./accounts.ts";
 import { escapeHtml } from "./html.ts";
 import { SECURITY_QUESTIONS } from "./security-questions.ts";
 
@@ -103,9 +104,33 @@ function nextField(next?: string): string {
 const withNext = (path: string, next?: string): string =>
   next ? `${path}?next=${encodeURIComponent(next)}` : path;
 
+// --- The guest door (brief 2 Step 11) --------------------------------------
+// Under the primary button on log in and register: one tap makes a signed-in
+// guest. Its own form, since forms can't nest; it carries `next`, and `from`
+// so a refusal (the rate limit) re-renders the page the visitor was on. The
+// refusal sits right above the button that caused it, and is focused like a
+// form's error summary.
+export type GuestDoorPage = "login" | "register";
+
+function guestDoor(from: GuestDoorPage, next?: string, error?: string): string {
+  return `<form class="guest-door" method="post" action="/guest">
+      ${nextField(next)}
+      <input type="hidden" name="from" value="${from}" />
+      ${error ? `<div class="summary" role="alert" tabindex="-1" data-summary data-guest-error>${escapeHtml(error)}</div>` : ""}
+      <button class="secondary" type="submit">Play as a guest</button>
+      <p class="why">${escapeHtml(MESSAGES.guestDoor)}</p>
+    </form>`;
+}
+
 // --- Log in ---------------------------------------------------------------
 
-export function loginPage(opts: { errors?: FormError[]; username?: string; next?: string; notice?: string }): string {
+export function loginPage(opts: {
+  errors?: FormError[];
+  username?: string;
+  next?: string;
+  notice?: string;
+  guestError?: string;
+}): string {
   const errors = opts.errors ?? [];
   return panel(`
     <h1>Log in</h1>
@@ -124,6 +149,7 @@ export function loginPage(opts: { errors?: FormError[]; username?: string; next?
       ${passwordInput("password", "Password", errors, { current: true, rules: false })}
       <button class="primary" type="submit">Log in</button>
     </form>
+    ${guestDoor("login", opts.next, opts.guestError)}
     <p class="links">
       <span><a href="/forgot-password">Forgot your password?</a></span>
       <span>New here? <a href="${escapeHtml(withNext("/register", opts.next))}">Create an account</a></span>
@@ -146,14 +172,27 @@ function questionOptions(selected: string, other: string, placeholder: string): 
   );
 }
 
-export function registerPage(opts: {
-  errors?: FormError[];
-  values?: Record<string, string>;
-  next?: string;
-  buyIn: number;
-}): string {
-  const errors = opts.errors ?? [];
-  const v = (k: string): string => opts.values?.[k] ?? "";
+type Values = (k: string) => string;
+
+// "Your login" and "If you forget your password" are shared by the register
+// page and a guest's Claim this account panel: the same ids, the same field()
+// wiring and the same messages (registerErrors), so an error for a field lands
+// in the same place on both pages.
+function loginFieldset(errors: FormError[], v: Values): string {
+  return `<fieldset>
+        <legend>Your login</legend>
+        ${field({
+          id: "username",
+          label: "Username",
+          input: `<input type="text" autocomplete="username" autocapitalize="none" spellcheck="false" required value="${escapeHtml(v("username"))}" />`,
+          hint: "3–20 characters: lowercase letters, numbers and _. You log in with this.",
+          error: errorFor(errors, "username"),
+        })}
+        ${passwordInput("password", "Password", errors, { current: false, rules: true })}
+      </fieldset>`;
+}
+
+function recoveryFieldset(errors: FormError[], v: Values): string {
   const questions = Array.from({ length: RECOVERY_QUESTIONS }, (_, i) => {
     const n = i + 1;
     const other = v(`question_${n === 1 ? 2 : 1}`);
@@ -178,6 +217,22 @@ export function registerPage(opts: {
         })}
       </div>`;
   }).join("");
+  return `<fieldset>
+        <legend>If you forget your password</legend>
+        <p class="why">There's no email reset here. Pick two questions only you can answer; you'll answer them to set a new password. Capitals and extra spaces don't matter.</p>
+        ${questions}
+      </fieldset>`;
+}
+
+export function registerPage(opts: {
+  errors?: FormError[];
+  values?: Record<string, string>;
+  next?: string;
+  buyIn: number;
+  guestError?: string;
+}): string {
+  const errors = opts.errors ?? [];
+  const v: Values = (k) => opts.values?.[k] ?? "";
 
   return panel(`
     <h1>Create an account</h1>
@@ -187,17 +242,7 @@ export function registerPage(opts: {
     ${errorSummary(errors)}
     <form method="post" action="/register">
       ${nextField(opts.next)}
-      <fieldset>
-        <legend>Your login</legend>
-        ${field({
-          id: "username",
-          label: "Username",
-          input: `<input type="text" autocomplete="username" autocapitalize="none" spellcheck="false" required value="${escapeHtml(v("username"))}" />`,
-          hint: "3–20 characters: lowercase letters, numbers and _. You log in with this.",
-          error: errorFor(errors, "username"),
-        })}
-        ${passwordInput("password", "Password", errors, { current: false, rules: true })}
-      </fieldset>
+      ${loginFieldset(errors, v)}
       <fieldset>
         <legend>At the table</legend>
         ${field({
@@ -209,14 +254,67 @@ export function registerPage(opts: {
           error: errorFor(errors, "display_name"),
         })}
       </fieldset>
-      <fieldset>
-        <legend>If you forget your password</legend>
-        <p class="why">There's no email reset here. Pick two questions only you can answer; you'll answer them to set a new password. Capitals and extra spaces don't matter.</p>
-        ${questions}
-      </fieldset>
+      ${recoveryFieldset(errors, v)}
       <button class="primary" type="submit">Create account and go to the table</button>
     </form>
+    ${guestDoor("register", opts.next, opts.guestError)}
     <p class="links"><span>Already have an account? <a href="${escapeHtml(withNext("/login", opts.next))}">Log in</a></span></p>`);
+}
+
+// --- A guest's profile: Claim this account (brief 2 Step 11) ---------------
+// Above the usual profile fields. The register page's login and recovery
+// fieldsets, posted to /profile/claim and checked by registerErrors, the same
+// function /register uses. The display name isn't in it: claiming keeps it,
+// and the usual Display name field below is where it changes.
+export function claimPanel(opts: { user: User; errors?: FormError[]; values?: Record<string, string> }): string {
+  const errors = opts.errors ?? [];
+  const v: Values = (k) => opts.values?.[k] ?? "";
+  return `<section class="claim" id="claim" aria-labelledby="claim-title">
+      <h2 id="claim-title">Claim this account</h2>
+      <p class="why">You're playing as <strong data-display-name>${escapeHtml(opts.user.display_name)}</strong>
+        (account <span data-username>${escapeHtml(opts.user.username)}</span>), with no password: only this browser
+        can get back in. Choose a username and password to keep it. Your seat, chips and results stay with you.</p>
+      ${errorSummary(errors)}
+      <form method="post" action="/profile/claim">
+        ${loginFieldset(errors, v)}
+        ${recoveryFieldset(errors, v)}
+        <button class="primary" type="submit">Claim this account</button>
+      </form>
+    </section>`;
+}
+
+// The profile page's panel: the same paper panel and client script as the
+// other account pages (so a guest's claim form gets the live checklist and
+// Show/Hide). The server builds the inside, since it reads the database.
+export function profilePanel(inner: string): string {
+  return panel(inner, false);
+}
+
+// --- Log out, for a guest (brief 2 Step 11) --------------------------------
+// Server-rendered, no confirm(): the header's Log out is a link here for a
+// guest. Claim it first is the default (first in tab order, the brass button).
+export function guestLogoutPage(): string {
+  return panel(
+    `<h1>Log out?</h1>
+    <p class="lede" id="guest-logout-warning">${escapeHtml(MESSAGES.guestLogout)}</p>
+    <div class="choices">
+      <a class="primary" href="/profile#claim" aria-describedby="guest-logout-warning">Claim it first</a>
+      <form method="post" action="/logout">
+        <button class="secondary" type="submit" aria-describedby="guest-logout-warning">Log out anyway</button>
+      </form>
+    </div>`,
+    false,
+  );
+}
+
+// GET /logout for a registered account: nothing to warn about, but a GET
+// still never logs anyone out on its own (a link or a prefetch could).
+export function logoutPage(): string {
+  return panel(
+    `<h1>Log out?</h1>
+    <form method="post" action="/logout"><button class="primary" type="submit">Log out</button></form>`,
+    false,
+  );
 }
 
 // --- Forgot / reset password ---------------------------------------------

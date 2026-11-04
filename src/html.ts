@@ -51,7 +51,13 @@ function navLink(href: string, label: string, item: NavItem, current: NavItem | 
 
 function siteHeader({ user, current, next, navExtra }: PageOptions): string {
   const suffix = next ? `?next=${encodeURIComponent(next)}` : "";
-  const account = user
+  // Brief 2 Step 11: a guest sees who they're playing as and a way to keep
+  // it, and their Log out goes to GET /logout's warning page first.
+  const account = user?.is_guest
+    ? `<span class="guest-group"><span class="guest-as">as</span> <span class="guest-name">${escapeHtml(user.display_name)}</span>
+      <a class="claim-link" href="/profile#claim"${current === "profile" ? ` aria-current="page"` : ""}>Claim account</a>
+      <a href="/logout">Log out</a></span>`
+    : user
     ? `${navLink("/profile", "Profile", "profile", current)}
       <form method="post" action="/logout"><button type="submit">Log out</button></form>`
     : `${navLink(`/login${suffix}`, "Log in", "login", current)}

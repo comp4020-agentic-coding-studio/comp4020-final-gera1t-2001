@@ -64,7 +64,31 @@ export const MESSAGES = {
   answersWrong: "One or more answers were incorrect. Check them and try again.",
   lockedOut: "Too many tries. You can try again after",
   passwordChanged: "Password changed. Log in with your new password.",
+  guestRateLimited: "Too many new guests from this network. Try again in an hour, or log in.",
+  guestDoor:
+    "No password. Your seat lives in this browser; claim the account later from your profile if you want to keep it.",
+  guestLogout: "You're a guest. If you log out you can't get back into this account.",
+  guestClaimed: "Account claimed. From now on, log in with your username and password.",
 } as const;
+
+// --- Guests (brief 2 Step 11) ---------------------------------------------
+// Read once at boot. The two limit numbers are env-overridable for tests: set
+// the override for the app and for `pnpm check` alike, as with the timings
+// listed in src/poker/live.ts. CI sets neither.
+
+// POST /guest makes at most GUEST_LIMIT accounts per IP per
+// GUEST_LIMIT_WINDOW_MS (in memory, so a restart forgets it).
+// A malformed override fails the boot rather than become NaN, which would
+// compare false with everything and turn the limit off.
+function positiveEnv(name: string, fallback: number): number {
+  const raw = process.env[name];
+  if (raw === undefined) return fallback;
+  const n = Number(raw);
+  if (!Number.isFinite(n) || n <= 0) throw new Error(`${name} must be a positive number, got ${JSON.stringify(raw)}`);
+  return n;
+}
+export const GUEST_LIMIT = positiveEnv("GUEST_LIMIT", 10);
+export const GUEST_LIMIT_WINDOW_MS = positiveEnv("GUEST_LIMIT_WINDOW_MS", 60 * 60_000);
 
 export interface RegisterInput {
   username: string;

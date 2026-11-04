@@ -6,13 +6,14 @@ import { escapeHtml } from "./html.ts";
 export interface LedgerRow {
   userId: number;
   displayName: string;
+  isGuest: number; // brief 2 Step 11: 1 for an unclaimed guest
   hands: number;
   net: number;
 }
 
 export interface RecentHand {
   endedAt: string;
-  players: { userId: number; displayName: string; net: number }[];
+  players: { userId: number; displayName: string; isGuest: number; net: number }[];
 }
 
 // How many finished hands the page lists.
@@ -23,7 +24,7 @@ export const RECENT_HANDS = 20;
 export function ledger(tableId: number): LedgerRow[] {
   return db
     .prepare(
-      `SELECT users.id AS userId, users.display_name AS displayName,
+      `SELECT users.id AS userId, users.display_name AS displayName, users.is_guest AS isGuest,
               COUNT(*) AS hands, SUM(hand_results.net) AS net
        FROM hand_results JOIN users ON users.id = hand_results.user_id
        WHERE hand_results.table_id = ?
@@ -49,7 +50,7 @@ export function recentHands(tableId: number, limit = RECENT_HANDS): RecentHand[]
   const rows = db
     .prepare(
       `SELECT hand_results.ended_at AS endedAt, users.id AS userId,
-              users.display_name AS displayName, hand_results.net AS net
+              users.display_name AS displayName, users.is_guest AS isGuest, hand_results.net AS net
        FROM hand_results JOIN users ON users.id = hand_results.user_id
        WHERE hand_results.table_id = ?
        ORDER BY hand_results.ended_at DESC, hand_results.id DESC`,
@@ -80,6 +81,12 @@ function signed(n: number): string {
   return "0";
 }
 
+// Brief 2 Step 11: an unclaimed guest's name carries a small tag, so a
+// ledger of "Guest 0412"s reads as guests, not as regulars who chose that.
+function playerName(p: { displayName: string; isGuest: number }): string {
+  return `${escapeHtml(p.displayName)}${p.isGuest ? ` <span class="tag" data-guest>guest</span>` : ""}`;
+}
+
 function netCell(n: number): string {
   return `<td class="num${n < 0 ? " neg" : ""}" data-net="${n}">${signed(n)}</td>`;
 }
@@ -95,7 +102,7 @@ export function resultsPage(tableId: number, youId: number): string {
         <tbody>${rows
           .map(
             (r) =>
-              `<tr data-user-id="${r.userId}"${r.userId === youId ? ` class="you"` : ""}><th scope="row">${escapeHtml(r.displayName)}${r.userId === youId ? " (you)" : ""}</th>` +
+              `<tr data-user-id="${r.userId}"${r.userId === youId ? ` class="you"` : ""}><th scope="row">${playerName(r)}${r.userId === youId ? " (you)" : ""}</th>` +
               `<td class="num" data-hands="${r.hands}">${r.hands.toLocaleString("en-AU")}</td>${netCell(r.net)}</tr>`,
           )
           .join("")}</tbody>
@@ -115,7 +122,7 @@ export function resultsPage(tableId: number, youId: number): string {
                 .map(
                   (p, i) =>
                     `<tr>${i === 0 ? `<td rowspan="${h.players.length}"><time datetime="${escapeHtml(h.endedAt)}">${escapeHtml(h.endedAt.slice(0, 16).replace("T", " "))} UTC</time></td>` : ""}` +
-                    `<td>${escapeHtml(p.displayName)}</td>${netCell(p.net)}</tr>`,
+                    `<td data-user-id="${p.userId}">${playerName(p)}</td>${netCell(p.net)}</tr>`,
                 )
                 .join("")}</tbody>`,
           )

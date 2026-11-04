@@ -1,4 +1,5 @@
 import { serve } from "@hono/node-server";
+import { getConnInfo } from "@hono/node-server/conninfo";
 import type { Context } from "hono";
 import { Hono } from "hono";
 import { deleteCookie, getCookie, setCookie } from "hono/cookie";
@@ -16,9 +17,22 @@ import {
   registerErrors,
 } from "./account-messages.ts";
 import type { FormError } from "./account-messages.ts";
-import { forgotPage, loginPage, registerPage, resetPage } from "./account-pages.ts";
 import {
+  claimPanel,
+  forgotPage,
+  guestLogoutPage,
+  loginPage,
+  logoutPage,
+  profilePanel,
+  registerPage,
+  resetPage,
+} from "./account-pages.ts";
+import type { GuestDoorPage } from "./account-pages.ts";
+import {
+  claimGuest,
+  createGuest,
   createUser,
+  findUserById,
   findUserByUsername,
   getSecurityQuestions,
   isRecoveryLocked,
@@ -31,6 +45,7 @@ import {
 import type { User } from "./accounts.ts";
 import type { TableView } from "./poker/table.ts";
 import { hashSecret, spendDummyVerify, verifySecret } from "./crypto.ts";
+import { takeGuestSlot } from "./guest-limit.ts";
 import { FAVICON_SVG, SITE_CSS, SITE_CSS_VERSION, errorList, escapeHtml, page } from "./html.ts";
 import { logEvent } from "./log.ts";
 import { resultsPage } from "./results.ts";
@@ -56,7 +71,7 @@ import {
   placeholderQuestionsForUsername,
   questionTextForKey,
 } from "./security-questions.ts";
-import { createSession, deleteSession, userForSessionToken } from "./sessions.ts";
+import { SESSION_LIFETIME_MS, createSession, deleteSession, userForSessionToken } from "./sessions.ts";
 
 // Opening the database here (src/db.ts) is what step 2/3 needed to show: the
 // file lives under /data in production, with the schema applied on boot.
@@ -81,8 +96,10 @@ function currentUser(c: Context): User | undefined {
   return token ? userForSessionToken(token) : undefined;
 }
 
-function signIn(c: Context, userId: number): void {
-  const { token, expiresAt } = createSession(userId);
+// lifetimeMs: omitted for a registered account (the session default); a
+// guest's is passed explicitly at POST /guest.
+function signIn(c: Context, userId: number, lifetimeMs?: number): void {
+  const { token, expiresAt } = createSession(userId, lifetimeMs);
   setCookie(c, SESSION_COOKIE, token, {
     httpOnly: true,
     sameSite: "Lax",
@@ -97,16 +114,44 @@ function signIn(c: Context, userId: number): void {
 
 // Only ever a same-site, root-relative path — never a scheme or a
 // protocol-relative "//host" — so this can't be used to redirect a visitor
-// off-site after they log in or register.
+// off-site after they log in or register. Brief 2 Step 11 review: any control
+// character or backslash is refused outright, since browsers drop tab, CR and
+// LF inside a URL ("/\t/evil.example" is followed as "//evil.example") and
+// treat "\" as "/"; a raw newline can't go in a Location header at all. What
+// is left must parse to this site's own origin.
+const NEXT_BASE = "http://next.invalid";
 function safeNextPath(raw: unknown): string | undefined {
   if (typeof raw !== "string" || raw === "") return undefined;
-  if (!raw.startsWith("/") || raw.startsWith("//") || raw.startsWith("/\\") || raw.includes("://")) {
+  if (!raw.startsWith("/") || raw.startsWith("//") || /[\x00-\x1f\x7f\\]/.test(raw)) return undefined;
+  let url: URL;
+  try {
+    url = new URL(raw, NEXT_BASE);
+  } catch {
     return undefined;
   }
-  return raw;
+  if (url.origin !== NEXT_BASE) return undefined;
+  return url.pathname + url.search + url.hash;
 }
 
 const app = new Hono();
+
+// Brief 2 Step 11 review: a cross-site form POST carries no SameSite=Lax
+// cookie, so /guest would make a fresh guest whose Set-Cookie replaces the
+// visitor's (for a guest, their only key) and /logout would delete it. Every
+// browser that matters sends Sec-Fetch-Site; anything but same-origin (or
+// "none", a typed URL or bookmark) on a POST is refused here, before any
+// route runs. A request without the header (curl, the spec's fetch) is let
+// through: it carries no visitor's cookies by accident. Not hono's csrf():
+// it refuses a form POST with neither header, and compares Origin with
+// c.req.url, which is http:// behind Fly's TLS while browsers send https://.
+app.use("*", async (c, next) => {
+  const site = c.req.header("Sec-Fetch-Site");
+  if (c.req.method === "POST" && site !== undefined && site !== "same-origin" && site !== "none") {
+    logEvent("action_rejected", { route: c.req.path, status: 403, reason: "cross_site" });
+    return c.text("Cross-site requests aren't accepted.", 403);
+  }
+  return next();
+});
 
 // The layout's stylesheet (src/html.ts links it as ?v=<content hash>). A
 // request for the current hash can be cached for good, since the next deploy
@@ -338,11 +383,53 @@ app.post("/login", async (c) => {
   return c.redirect(next ?? DEFAULT_LANDING, 303);
 });
 
+// Brief 2 Step 11: the header's Log out is a link here for a guest, who gets
+// a warning and a choice; the page's Log out anyway is the POST below. Never
+// logs anyone out on a GET.
+app.get("/logout", (c) => {
+  const user = currentUser(c);
+  if (!user) return c.redirect("/", 303);
+  return c.html(page("Log out", user.is_guest ? guestLogoutPage() : logoutPage(), { user }));
+});
+
 app.post("/logout", (c) => {
   const token = getCookie(c, SESSION_COOKIE);
   if (token) deleteSession(token);
   deleteCookie(c, SESSION_COOKIE, { path: "/" });
   return c.redirect("/", 303);
+});
+
+// --- Guests (brief 2 Step 11) -------------------------------------------------
+
+// The rate limit's key: Fly-Client-IP when present (on Fly, the visitor's
+// address, set by Fly's proxy), else the socket's. See src/guest-limit.ts.
+function clientIp(c: Context): string {
+  return c.req.header("Fly-Client-IP") ?? getConnInfo(c).remote.address ?? "unknown";
+}
+
+app.post("/guest", async (c) => {
+  const body = await c.req.parseBody();
+  const next = safeNextPath(typeof body.next === "string" ? body.next : undefined);
+  // Already signed in (a stale log-in tab): no second account, and the
+  // session this browser has isn't replaced.
+  if (currentUser(c)) return c.redirect(next ?? DEFAULT_LANDING, 303);
+
+  if (!takeGuestSlot(clientIp(c))) {
+    logEvent("action_rejected", { route: "guest", status: 429, reason: "rate_limited" });
+    const from: GuestDoorPage = body.from === "register" ? "register" : "login";
+    const guestError = MESSAGES.guestRateLimited;
+    return c.html(
+      from === "register"
+        ? page("Create an account", registerPage({ next, buyIn: buyIn(), guestError }), { current: "register", next })
+        : page("Log in", loginPage({ next, guestError }), { current: "login", next }),
+      429,
+    );
+  }
+
+  const guest = createGuest();
+  signIn(c, guest.id, SESSION_LIFETIME_MS); // owner decision: guest sessions last 30 days
+  logEvent("guest_created", { user: guest.id, name: guest.display_name });
+  return c.redirect(next ?? DEFAULT_LANDING, 303);
 });
 
 // --- Profile -------------------------------------------------------------
@@ -374,16 +461,85 @@ function securityQuestionsSummary(userId: number): string {
   return `<h2>Your security questions</h2><ul>${items}</ul>`;
 }
 
+// The whole profile page. A guest gets the Claim this account panel above the
+// usual fields (brief 2 Step 11) and has no security questions to list.
+function profilePage(
+  user: User,
+  opts: { profileErrors?: string[]; claimErrors?: FormError[]; claimValues?: Record<string, string>; notice?: string } = {},
+): string {
+  const inner = `<h1>My profile</h1>
+    ${opts.notice ? `<p class="notice" role="status">${escapeHtml(opts.notice)}</p>` : ""}
+    ${user.is_guest ? claimPanel({ user, errors: opts.claimErrors, values: opts.claimValues }) : ""}
+    ${user.is_guest ? `<h2>At the table</h2>` : ""}
+    ${profileForm(user, opts.profileErrors ?? [])}
+    ${user.is_guest ? "" : securityQuestionsSummary(user.id)}`;
+  return page("My profile", profilePanel(inner), { user, current: "profile" });
+}
+
 app.get("/profile", (c) => {
   const user = currentUser(c);
   if (!user) return c.redirect("/login", 303);
-  return c.html(
-    page(
-      "My profile",
-      `<main class="auth"><section class="panel"><h1>My profile</h1>${profileForm(user, [])}${securityQuestionsSummary(user.id)}</section></main>`,
-      { user, current: "profile" },
-    ),
+  const notice = c.req.query("claimed") === "1" && !user.is_guest ? MESSAGES.guestClaimed : undefined;
+  return c.html(profilePage(user, { notice }));
+});
+
+// Brief 2 Step 11: a guest becomes a registered account, keeping its id (so
+// its seat, stack and hand_results stay) and its display name. Checked by
+// registerErrors, the function /register uses, so the rules, the messages and
+// which field each message belongs to are the register page's.
+app.post("/profile/claim", async (c) => {
+  const user = currentUser(c);
+  if (!user) return c.redirect("/login", 303);
+  if (!user.is_guest) return c.redirect("/profile", 303);
+
+  const body = await c.req.parseBody();
+  const str = (k: string): string => (typeof body[k] === "string" ? (body[k] as string) : "");
+  const username = str("username").trim();
+  // A double-tapped Claim: the first request may have claimed this account
+  // while this one waited for its body. Then it isn't "username taken"; the
+  // claim already happened.
+  const now = findUserById(user.id);
+  if (!now?.is_guest) return c.redirect(now?.username === username ? "/profile?claimed=1" : "/profile", 303);
+  const password = str("password");
+  const questions = Array.from({ length: RECOVERY_QUESTION_COUNT }, (_, i) => ({
+    questionKey: str(`question_${i + 1}`).trim(),
+    answer: str(`answer_${i + 1}`).trim(),
+  }));
+
+  const rerender = (errors: FormError[]): Response => {
+    // Typed values come back, except the password, as on /register.
+    const values: Record<string, string> = { username };
+    questions.forEach((q, i) => {
+      values[`question_${i + 1}`] = q.questionKey;
+      values[`answer_${i + 1}`] = q.answer;
+    });
+    logEvent("action_rejected", { route: "claim", user: user.id, status: 400, reason: errors.map((e) => e.field ?? "form").join(",") });
+    return c.html(profilePage(user, { claimErrors: errors, claimValues: values }), 400);
+  };
+
+  const errors = registerErrors(
+    { username, password, displayName: user.display_name, bio: "", questions },
+    { usernameTaken: !!findUserByUsername(username), isValidQuestionKey },
   );
+  if (errors.length > 0) return rerender(errors);
+
+  const claimed = claimGuest(
+    user.id,
+    username,
+    hashSecret(password),
+    questions.map((q) => ({ questionKey: q.questionKey, answerHash: hashSecret(normaliseAnswer(q.answer)) })),
+  );
+  // Taken between the check above and the write: the same message the check
+  // gives, on the same field.
+  if (!claimed) return rerender([{ field: "username", message: MESSAGES.usernameTaken }]);
+
+  // A new session for the account it now is, with the default lifetime; the
+  // guest's session ends here.
+  const oldToken = getCookie(c, SESSION_COOKIE);
+  if (oldToken) deleteSession(oldToken);
+  signIn(c, user.id);
+  logEvent("guest_claimed", { user: user.id, name: user.display_name });
+  return c.redirect("/profile?claimed=1", 303);
 });
 
 app.post("/profile", async (c) => {
@@ -403,14 +559,7 @@ app.post("/profile", async (c) => {
   }
 
   if (errors.length > 0) {
-    return c.html(
-      page(
-        "My profile",
-        `<main class="auth"><section class="panel"><h1>My profile</h1>${profileForm({ ...user, display_name: displayNameInput, bio }, errors)}${securityQuestionsSummary(user.id)}</section></main>`,
-        { user, current: "profile" },
-      ),
-      400,
-    );
+    return c.html(profilePage({ ...user, display_name: displayNameInput, bio }, { profileErrors: errors }), 400);
   }
 
   // Same rule as registration: an empty display name falls back to the
@@ -421,8 +570,17 @@ app.post("/profile", async (c) => {
 
 // --- Forgot password -------------------------------------------------------
 
-function securityQuestionsForUsername(username: string): { position: number; question: string }[] {
+// Brief 2 Step 11: a guest has no questions and no way back in except its
+// cookie, so recovery treats a guest username exactly like one with no
+// account: the same placeholder questions, the same cost, the same failure,
+// and no attempt counted (so never the lock-out message either).
+function recoverableUser(username: string): User | undefined {
   const user = findUserByUsername(username);
+  return user && !user.is_guest ? user : undefined;
+}
+
+function securityQuestionsForUsername(username: string): { position: number; question: string }[] {
+  const user = recoverableUser(username);
   if (user) {
     return getSecurityQuestions(user.id).map((q) => ({
       position: q.position,
@@ -475,7 +633,7 @@ app.post("/reset-password", async (c) => {
   }
 
   const genericFailure = (): Response => rerender([{ field: "answer_1", message: MESSAGES.answersWrong }]);
-  const user = findUserByUsername(username);
+  const user = recoverableUser(username);
 
   if (!user) {
     // Spend the same scrypt cost a real check would, so a nonexistent

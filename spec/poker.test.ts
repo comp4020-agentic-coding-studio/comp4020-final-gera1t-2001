@@ -1618,3 +1618,146 @@ describe.skipIf(!isLocal)("settling every hand, and busting out (writes test dat
     },
   );
 });
+
+// Brief 2 Step 11: the guest door, at the table. In this file because these
+// tests sit at table 1; the guest tests that don't are in
+// spec/accounts.test.ts. Each guest comes from its own made-up Fly-Client-IP
+// (the rate limit's key), so they never use up localhost's budget.
+describe.skipIf(!isLocal)("guests at the table (writes test data — local only)", () => {
+  let players: Player[] = [];
+
+  afterEach(async () => {
+    await cleanupTable(players);
+    players = [];
+  });
+
+  async function guestCookie(): Promise<{ cookie: string; landing: URL }> {
+    const ip = `10.${[...randomBytes(3)].join(".")}`;
+    const res = await fetch(new URL("/guest", baseUrl), {
+      method: "POST",
+      body: new URLSearchParams(),
+      headers: { "Fly-Client-IP": ip },
+      redirect: "manual",
+    });
+    const cookie = sessionCookieFrom(res);
+    if (!cookie) throw new Error(`POST /guest made no session: ${res.status}`);
+    return { cookie, landing: new URL(res.headers.get("location")!, baseUrl) };
+  }
+
+  async function sit(cookie: string): Promise<Player> {
+    const res = await fetch(new URL(`/tables/${TABLE_ID}/sit`, baseUrl), { method: "POST", headers: { cookie } });
+    const view = (await res.json()) as TableView & { error?: string };
+    if (!res.ok) throw new Error(`sit failed: ${view.error}`);
+    const seat = view.seats.find((s) => s.userId === view.you)!;
+    return { username: seat.username, userId: view.you!, cookie, seatNo: seat.seatNo };
+  }
+
+  // The rows' facts: who, how much, when. (The route also joins in the
+  // user's current username, which a claim changes on purpose.)
+  async function resultsRows(cookie: string): Promise<{ userId: number; net: number; endedAt: string }[]> {
+    const rows = (await (await fetch(new URL(`/tables/${TABLE_ID}/results`, baseUrl), { headers: { cookie } })).json()) as {
+      userId: number;
+      net: number;
+      endedAt: string;
+    }[];
+    return rows.map(({ userId, net, endedAt }) => ({ userId, net, endedAt }));
+  }
+
+  // Whether /results tags this user as a guest, in the ledger row and in
+  // every recent-hand row that names them.
+  async function guestTags(cookie: string, userId: number): Promise<{ ledger: boolean; recent: boolean[] }> {
+    const doc = new JSDOM(await (await fetch(new URL("/results", baseUrl), { headers: { cookie } })).text()).window
+      .document;
+    const row = doc.querySelector(`#ledger tr[data-user-id="${userId}"]`);
+    if (!row) throw new Error(`user ${userId} has no ledger row`);
+    return {
+      ledger: row.querySelector("[data-guest]") !== null,
+      recent: [...doc.querySelectorAll(`#recent td[data-user-id="${userId}"]`)].map((td) => td.querySelector("[data-guest]") !== null),
+    };
+  }
+
+  it("33. POST /guest signs in and lands on the table, where the guest can sit and act", async () => {
+    const { cookie, landing } = await guestCookie();
+    expect(landing.pathname).toBe(`/tables/${TABLE_ID}`);
+    const page = await fetch(landing, { headers: { cookie }, redirect: "manual" });
+    expect(page.status).toBe(200); // signed in: the table, not a redirect to log in
+
+    const guest = await sit(cookie);
+    const other = await registerAndSit();
+    players = [guest, other];
+    expect(guest.username).toMatch(/^guest-[a-z2-7]{6}$/);
+
+    // Whoever is first to act, the guest acts in this hand: if it's the guest,
+    // they call; if not, the other player calls and the guest checks.
+    let view = await startHand(guest.cookie);
+    if (view.hand!.actionTo !== guest.seatNo) view = await act(other.cookie, "call");
+    expect(view.hand!.actionTo).toBe(guest.seatNo);
+    const owed = Math.max(...view.hand!.players.map((p) => p?.betThisStreet ?? 0)) - view.hand!.players[guest.seatNo]!.betThisStreet;
+    const after = await act(guest.cookie, owed > 0 ? "call" : "check");
+    expect(after.lastAction?.seat).toBe(guest.seatNo);
+    expect(after.lastAction?.auto).toBe(false);
+  });
+
+  it("34. claim, log out, log in with the claimed details: same user, no longer a guest, seat and results unchanged", async () => {
+    const { cookie } = await guestCookie();
+    const guest = await sit(cookie);
+    const other = await registerAndSit();
+    players = [guest, other];
+    // One finished hand, so the guest has a hand_results row and a stack
+    // that isn't the buy-in.
+    const dealt = await startHand(guest.cookie);
+    await act(players.find((p) => p.seatNo === dealt.hand!.actionTo)!.cookie, "fold");
+    const before = await getView(guest.cookie);
+    const seatBefore = before.seats.find((s) => s.userId === guest.userId)!;
+    const rowsBefore = (await resultsRows(guest.cookie)).filter((r) => r.userId === guest.userId);
+    expect(rowsBefore.length).toBe(1);
+    expect(await guestTags(guest.cookie, guest.userId)).toEqual({ ledger: true, recent: [true] });
+
+    const username = randomUsername();
+    const claimRes = await fetch(new URL("/profile/claim", baseUrl), {
+      method: "POST",
+      headers: { cookie },
+      redirect: "manual",
+      body: new URLSearchParams({
+        username,
+        password: VALID_PASSWORD,
+        question_1: "first_dish",
+        answer_1: "pasta",
+        question_2: "childhood_nickname",
+        answer_2: "rex",
+      }),
+    });
+    expect(claimRes.status).toBe(303);
+    // The claim ends the guest's session and starts a new one.
+    const claimedCookie = sessionCookieFrom(claimRes)!;
+    expect(claimedCookie).toBeDefined();
+    players = [{ ...guest, cookie: claimedCookie, username }, other];
+
+    // Log out (the claimed session), then log in with what was chosen.
+    await fetch(new URL("/logout", baseUrl), { method: "POST", headers: { cookie: claimedCookie }, redirect: "manual" });
+    const fresh = await logIn(username);
+    players = [{ ...guest, cookie: fresh, username }, other];
+    const view = await getView(fresh);
+    expect(view.you).toBe(guest.userId);
+
+    // is_guest is 0: the profile has no claim panel, the header no guest
+    // name, Results no tag.
+    const profile = new JSDOM(await (await fetch(new URL("/profile", baseUrl), { headers: { cookie: fresh } })).text())
+      .window.document;
+    expect(profile.querySelector("#claim")).toBeNull();
+    expect(profile.querySelector(".site-nav .guest-name")).toBeNull();
+    expect(await guestTags(fresh, guest.userId)).toEqual({ ledger: false, recent: [false] });
+
+    // Seat, stack, display name and hand_results as they were.
+    // (Not `away`: neither player holds a stream here, so that can flip.)
+    const seatAfter = view.seats.find((s) => s.userId === guest.userId)!;
+    expect(seatAfter.username).toBe(username);
+    expect({ seatNo: seatAfter.seatNo, stack: seatAfter.stack, displayName: seatAfter.displayName }).toEqual({
+      seatNo: seatBefore.seatNo,
+      stack: seatBefore.stack,
+      displayName: seatBefore.displayName,
+    });
+    expect(seatBefore.stack).not.toBe(before.table.buy_in); // the hand moved chips, so this compares something
+    expect((await resultsRows(fresh)).filter((r) => r.userId === guest.userId)).toEqual(rowsBefore);
+  });
+});
