@@ -2862,3 +2862,26 @@ real, and all are fixed with tests that go red on the reviewed code.
 red → green; the two bust tests red on the reviewed code → green.
 
 **Curated prompt:** "Do Step 12 only and stop."
+
+## 2026-11-06 23:48 — [routine]
+
+**What happened:** Committed the owner's Step 13 run file,
+`docs/step-13-run.md`, on its own before starting it. It adds a production
+backup before the push, a CI check that test 5b ran, a `Fly-Client-IP`
+spoofing check and one production guest to Step 13 of
+`docs/final-brief-2.md`.
+
+**What I did instead of the obvious thing:** The owner asked to push
+first, then follow the file. The file's Part 1 says production is backed
+up before anything is pushed, because this deploy runs migrations 0006 and
+0007. So I kept the backup ahead of the push. When the backup command was
+refused in this session, I pushed nothing and stopped for the owner.
+
+**How I knew it was right:** `git show --stat f4af94e` shows a single
+added file, `docs/step-13-run.md`. `git log origin/main..HEAD` still shows
+the 24 unpushed commits plus this one, so nothing was deployed.
+
+**Citation:** `f4af94e`.
+
+**Curated prompt:** "Push everything, then read docs/step-13-run.md and
+follow it. Commit that file first, on its own, with a log entry."
