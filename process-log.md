@@ -2886,7 +2886,7 @@ the 24 unpushed commits plus this one, so nothing was deployed.
 **Curated prompt:** "Push everything, then read docs/step-13-run.md and
 follow it. Commit that file first, on its own, with a log entry."
 
-## 2026-11-07 02:40 — [routine]
+## 2026-11-07 02:09 — [routine]
 
 **What happened:** Step 13's red commit. Test 37 in `spec/poker.test.ts`
 (beside test 19, since it plays on table 1): one pair play a hand to a
@@ -2909,7 +2909,7 @@ test 37 fails ("expected HTMLElement{} to be null" on `[data-pot]`); test
 **Curated prompt:** "Keep the order in docs/step-13-run.md: backup, then
 the local walk and checks, then stop and wait for my push."
 
-## 2026-11-07 02:55 — [judgement]
+## 2026-11-07 02:10 — [judgement]
 
 **What happened:** Step 13, Parts 1 and 2 of `docs/step-13-run.md`, up to
 the stop before the push.
