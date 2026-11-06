@@ -1213,6 +1213,34 @@ describe.skipIf(!isLocal)("table page (writes test data — local only)", () => 
     expect(doc.querySelector(".said")).toBeNull();
     expect(doc.querySelector("[data-pot]")).toBeNull();
   });
+
+  // Step 13 review: test 19 covers an emptied table; the last hand also
+  // showed again as soon as someone new sat down, crediting its pot to
+  // whoever now sits in the winner's seat.
+  it("37. a new pair that sits down after the last pair left sees no hand, and nobody is credited with it", async () => {
+    const alice = await registerAndSit();
+    const bob = await registerAndSit();
+    players = [alice, bob];
+    const view = await startHand(alice.cookie);
+    await act(players.find((p) => p.seatNo === view.hand!.actionTo)!.cookie, "fold");
+    await leaveTable(alice.cookie);
+    await leaveTable(bob.cookie);
+
+    const carol = await registerAndSit();
+    const dave = await registerAndSit();
+    players = [carol, dave];
+    // Two seated again, so the old rule (hide only at an empty table) shows
+    // the last hand to them.
+    const doc = await tablePage(carol.cookie);
+    expect(doc.querySelectorAll(".board .card:not(.slot)").length).toBe(0);
+    expect(doc.querySelector("[data-pot]")).toBeNull();
+    expect(doc.querySelector(".said")).toBeNull();
+    const prompt = doc.querySelector("[data-prompt]")!.textContent!;
+    const names = (await getView(carol.cookie)).seats.map((s) => s.displayName);
+    expect(names).toHaveLength(2);
+    for (const name of names) expect(prompt).not.toContain(name);
+    expect(prompt).not.toMatch(/Hand over/);
+  });
 });
 
 // Brief 2 Step 10: showdown for everyone, and no dead time. Every hand that
