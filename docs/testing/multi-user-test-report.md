@@ -5,8 +5,12 @@
 events (SSE); actions go up as POSTs. State lives in SQLite on the app's one
 Fly volume, and the live-update fan-out is in memory in one Node process.
 
-**Test date:** 19 October 2026 · **Build:** structured logs added
-in `b08de89` · **Testers:** _names / devices_
+**Test date:** 7 November 2026 (AEDT; 6 Nov 16:43–16:48 UTC in the
+excerpts) · **Build:** `386423f` on production (brief 2 Steps 10–13) ·
+**Testers:** the coding agent, with two headless Chromium browsers (separate
+cookie jars) signed in as the two production test accounts, `probe_a` and
+`probe_b`, and `flyctl logs` running. Not run on real phones. Log excerpts
+drop the `app[…] syd [info]` prefix and the `machine=82541eb7995158` field.
 
 ## How to read the logs
 
@@ -38,11 +42,19 @@ log lines that show it.
 `clients_in_table` rising 1 → 2, and receives a `snapshot via=stream_connect`.
 Each player sees the other appear without a reload.
 
-**Observed:** _…_
+**Observed:** as expected. A sat; B's page showed A's seat without a
+reload; B sat; A's page showed B's. Both pills Live.
 
 **Log excerpt:**
 ```
-_paste_
+16:43:19Z event=join table=1 user=1 name=probe_a clients_in_table=1 users_connected=1
+16:43:19Z event=snapshot table=1 user=1 name=probe_a seq=0 via=stream_connect
+16:43:20Z event=join table=1 user=2 name=probe_b clients_in_table=2 users_connected=2
+16:43:20Z event=snapshot table=1 user=2 name=probe_b seq=0 via=stream_connect
+16:43:20Z event=sit table=1 user=1 name=probe_a seat=0 stack=1000
+16:43:20Z event=broadcast table=1 seq=1 recipients=2
+16:43:20Z event=sit table=1 user=2 name=probe_b seat=1 stack=1000
+16:43:20Z event=broadcast table=1 seq=2 recipients=2
 ```
 
 ### b) One user's action reaches the others
@@ -57,7 +69,29 @@ then the next hand deals itself if two seated players are present:
 `hand_start … by=auto`, with no `action_received route=start` before it. A
 hand someone deals by pressing the button logs `by=manual`.
 
-**Observed:** _…_
+**Observed:** as expected.
+- **The action reached the other page:** A's call showed on B's page within
+  60 ms, measured by polling the DOM, so that is an upper bound. Applied and
+  broadcast in the same second.
+- **Turn length:** a fresh turn's `turnSeconds` was 20.
+- **Auto-deal:** on the server's clock the hand ended at 16:43:25 and
+  `by=auto` dealt at 16:43:31, 6 s later (log times are whole seconds),
+  with no `route=start` between them. Both pages showed the new hand.
+- **The countdown's first label read "Next hand in 7 s",** not 6. The page
+  counts down to `nextHandAt` on the browser's own clock, the same way it
+  counts down a turn, and rounds up. The test machine's clock was about a
+  second behind the server's. Only the first label is off: the deal runs
+  on the server's timer.
+
+```
+16:43:22Z event=action_received table=1 route=act user=1 name=probe_a type=call amount=-
+16:43:22Z event=action_applied table=1 user=1 name=probe_a seat=0 type=CALL auto=false street=PREFLOP next_to_act=1 hand_over=false
+16:43:22Z event=broadcast table=1 seq=4 recipients=2
+…
+16:43:25Z event=action_applied table=1 user=1 name=probe_a seat=0 type=CHECK auto=false street=SHOWDOWN next_to_act=- hand_over=true
+16:43:25Z event=broadcast table=1 seq=11 recipients=2
+16:43:31Z event=hand_start table=1 hand=1 players=2 to_act=0 by=auto ended_at_deal=false
+```
 
 ### c) Simultaneous actions (same second)
 
@@ -70,7 +104,25 @@ race, exactly one of the two is applied and the loser logs
 `action_lost_race` (the version check on `table_state`). Chip totals stay
 the same.
 
-**Observed:** _…_
+**Observed:** as expected. Both pages sent the same `call` at the same
+moment, A being the one to act.
+- **One applied, written once:** A's call was applied, and `table_state`'s
+  version went up by exactly one (84 → 85).
+- **The other refused with a 400:** B's arrived just after, once it was
+  B's turn, so it was refused as an illegal move ("Nothing to call. Check
+  instead.") rather than as out of turn. Which reason the loser gets
+  depends only on which request lands first. Either way it is not applied.
+- **No click-vs-timer race** came up in this run, so there is no
+  `action_lost_race` line here. Test 8 in `spec/poker.test.ts` covers that
+  race ("a real action just before the deadline is not overridden").
+
+```
+16:43:57Z event=action_received table=1 route=act user=1 name=probe_a type=call amount=-
+16:43:57Z event=action_applied table=1 user=1 name=probe_a seat=0 type=CALL auto=false street=PREFLOP next_to_act=1 hand_over=false
+16:43:57Z event=broadcast table=1 seq=15 recipients=2
+16:43:57Z event=action_received table=1 route=act user=2 name=probe_b type=call amount=-
+16:43:57Z event=action_rejected table=1 route=act user=2 name=probe_b type=call amount=- status=400 reason="Nothing to call. Check instead."
+```
 
 ### d) Late user joins
 
@@ -81,7 +133,18 @@ A third person opens the table mid-hand.
 it is. They see no one's hole cards. They can sit down for the next hand
 (`sit`), but are not dealt into the current one.
 
-**Observed:** _…_
+**Observed:** as expected. A second browser for B opened `/tables/1` on the
+turn of a running hand.
+- **It got a snapshot:** `join` with `clients_in_table` one higher (3: A,
+  and B in two browsers), and a `snapshot via=stream_connect`.
+- **It drew the current hand:** the street (TURN) and the pot (20).
+- **A's two cards were backs.** The view's JSON held no A card, only
+  nulls.
+
+```
+16:45:31Z event=join table=1 user=2 name=probe_b clients_in_table=3 users_connected=2
+16:45:31Z event=snapshot table=1 user=2 name=probe_b seq=19 via=stream_connect
+```
 
 ### e) Leave and return (tab close)
 
@@ -94,7 +157,29 @@ logs `join` and `back`; they keep their seat and chips. After 5 timeouts in a
 row, or 5 minutes away, they're stood up when the hand ends
 (`stood_up`).
 
-**Observed:** _…_
+**Observed:** as expected for away and return. B's tab was closed with
+both seated.
+- **Away after 10 s:** A's page showed the "Away" tag on B's seat 10.3 s
+  later. The view had `away: true`, with the seat kept.
+- **Back in 1.2 s:** B came back about a second after being marked away.
+  `back` and `join` were logged, the tag went, and B had the same seat and
+  stack (985 before, 985 after).
+- **Not seen here:** the 5 s away turn and the stand-ups. No turn fell to
+  B while B was away, and nobody stayed away long enough. In
+  `spec/poker.test.ts` "ghost seats", test 1 covers the away turn and test
+  3 the stand-up after 5 timeouts. The 5-minutes-away stand-up wasn't
+  checked here.
+- **An earlier `away` for both, at 16:45:41, is not this scenario.** Both
+  browsers had been closed for more than 10 s between two script runs, so
+  both were marked away, correctly, and came back when the next run opened
+  them.
+
+```
+16:45:51Z event=disconnect table=1 user=2 name=probe_b clients_in_table=1 users_connected=1
+16:46:01Z event=away table=1 user=2 name=probe_b
+16:46:02Z event=back table=1 user=2 name=probe_b
+16:46:02Z event=join table=1 user=2 name=probe_b clients_in_table=2 users_connected=2
+```
 
 ### f) Isolated room joins
 
@@ -106,7 +191,27 @@ and `action_rejected table=2 status=404`. Within table 1, what is private stays 
 stream carries only their own hole cards before showdown (checked by
 `spec/poker.test.ts`).
 
-**Observed:** _…_
+**Observed:** table 1 stayed isolated, but one detail differs from
+Expected.
+- **As expected:** `/tables/2` and `/tables/2/events` returned 404, and
+  table 1 kept answering unchanged.
+- **Not 404:** a signed-in POST to `/tables/2/act` got **400 "No such
+  table."**, logged as `action_rejected table=2 status=400`.
+- **An extra line:** the same request also logged a
+  `broadcast table=2 … recipients=0`.
+- **Why both happen:** the act route marks the poster present *before* the
+  table is checked (`markPresent`, `src/server.ts`, in place since brief 1
+  Step 4). A user never seen at table 2 counts as coming back, which
+  broadcasts to table 2's nobody. Then the engine refuses the move as "No
+  such table.", which the route answers with its usual 400.
+- **Harmless:** nothing reaches table 1 or the database. Left as it is;
+  noted for the owner.
+
+```
+16:46:06Z event=action_received table=2 route=act user=1 name=probe_a type=check amount=-
+16:46:06Z event=broadcast table=2 seq=1 recipients=0
+16:46:06Z event=action_rejected table=2 route=act user=1 name=probe_a type=check amount=- status=400 reason="No such table."
+```
 
 ### g) Two users on different machines (`fly scale count 2`)
 
@@ -136,7 +241,23 @@ the app is up (the stream retries every 2 s; the watchdog polls). Logs show
 page. The hand in progress and its turn deadline are restored from
 `table_state`. Nobody is marked away in the first 30 s after the boot.
 
-**Observed:** _…_
+**Observed:** as expected. Both pages were open with a hand running when
+`flyctl machine restart 82541eb7995158` ran at 16:47:57.
+- **Reconnecting, then Live:** both pills went to Reconnecting within a
+  second and were Live again 12.7 s after leaving it.
+- **A new boot:** `boot` with a new `boot_id`, then a `join` per page.
+- **The hand restored:** the view had a new `bootId`, the **same
+  `handId`**, the hand still running on the same street, and the same turn
+  deadline.
+- **Nobody marked away.**
+
+```
+16:47:58Z  INFO Sending signal SIGINT to main child process w/ PID 604
+16:47:59Z [  306.744068] reboot: Restarting system
+16:48:03Z event=boot boot_id=81961a17-05f1-4f8e-8fdb-95b3bea36a29
+16:48:03Z event=join table=1 user=1 name=probe_a clients_in_table=1 users_connected=1
+16:48:11Z event=join table=1 user=2 name=probe_b clients_in_table=2 users_connected=2
+```
 
 ### i) A showdown: every page shows the same tabled hands
 
@@ -174,19 +295,40 @@ view is cut from it. Note that `hand=` on `hand_start` is always 1 (each
 hand runs on a fresh engine), so count hands by `hand_start` lines, not by
 that number.
 
+**Observed:** as expected, with two players. Not run with a spectator or
+a third player, so the partial-fold case wasn't seen.
+- **Check-down to showdown:** each page drew the other's real cards, the
+  same as that player's own dock. A held A♣ Q♣ and B held 4♦ 2♥, the same
+  on both pages.
+- **Identical views:** the two views' JSON held identical hands for every
+  seat.
+- **The same result line on both pages:** "Hand over. probe_b won 20 with
+  two pair."
+- **The auto-dealt next hand, folded out:** neither page drew the other's
+  cards. `handRank` was null in both views, and both said "Hand over.
+  probe_b won 10. Everyone else folded."
+- **Each end was followed by `by=auto`** 6 s later.
+
+```
+16:46:25Z event=action_applied table=1 user=1 name=probe_a seat=0 type=CHECK auto=false street=SHOWDOWN next_to_act=- hand_over=true
+16:46:31Z event=hand_start table=1 hand=1 players=2 to_act=0 by=auto ended_at_deal=false
+16:46:31Z event=action_applied table=1 user=1 name=probe_a seat=0 type=FOLD auto=false street=SHOWDOWN next_to_act=- hand_over=true
+16:46:37Z event=hand_start table=1 hand=1 players=2 to_act=0 by=auto ended_at_deal=false
+```
+
 ## Summary
 
 | Scenario | Expected | Observed | Pass? |
 |---|---|---|---|
-| a) Two users join | Both see each other, 2 × `join` | | |
-| b) Action propagates | Other screens within ~1 s, `broadcast`; 20 s turn; next hand deals itself 6 s after the last (`by=auto`) | | |
-| c) Simultaneous actions | One applied, other rejected or lost race | | |
-| d) Late join | Snapshot of current hand, no hidden cards | | |
-| e) Leave and return | Away after 10 s, 5 s turns, seat kept | | |
-| f) Isolated room | 404 for other tables; private cards stay private | | |
+| a) Two users join | Both see each other, 2 × `join` | 2 × `join` (1 → 2), each saw the other sit, no reload | Yes |
+| b) Action propagates | Other screens within ~1 s, `broadcast`; 20 s turn; next hand deals itself 6 s after the last (`by=auto`) | ≤ 60 ms to the other page; `turnSeconds` 20; `by=auto` 6 s after the hand ended (server clock); first label "7 s" on a client clock ~1 s behind | Yes |
+| c) Simultaneous actions | One applied, other rejected or lost race | One applied, version +1; the other 400 ("Nothing to call") | Yes |
+| d) Late join | Snapshot of current hand, no hidden cards | `snapshot via=stream_connect`; street and pot shown; A's cards backs, null in JSON | Yes |
+| e) Leave and return | Away after 10 s, 5 s turns, seat kept | Away at 10.3 s, seat and stack kept, `back` on return; 5 s turn not seen | Yes (5 s turn untested here) |
+| f) Isolated room | 404 for other tables; private cards stay private | Page and stream 404; POST got **400** "No such table.", plus a `broadcast table=2 recipients=0`; table 1 unaffected | Partly (status differs) |
 | g) Different machines | Not supported by design (single volume) | Not run | n/a |
-| h) Machine restart | Reconnecting → Live, hand restored | | |
-| i) Showdown for everyone | Same tabled hands on every page; folded hands and a fold-out winner stay hidden | | |
+| h) Machine restart | Reconnecting → Live, hand restored | Live again after 12.7 s; new `boot_id`; same hand and deadline; nobody away | Yes |
+| i) Showdown for everyone | Same tabled hands on every page; folded hands and a fold-out winner stay hidden | Same faces and result on both pages; fold-out winner hidden, `handRank` null | Yes (two players only) |
 
 ## Background: what earlier testing found
 

@@ -3050,3 +3050,111 @@ is "always set by the Fly Proxy", but make no such promise for
 
 **Curated prompt:** "push" (Part 4 of `docs/step-13-run.md`), then the
 owner's choice: "Temporary log line".
+
+## 2026-11-07 03:28 — [routine]
+
+**What happened:** Removed the temporary `ip_probe` middleware from
+`src/server.ts` and recorded the finding in `src/guest-limit.ts`'s header:
+on production, a client-sent `Fly-Client-IP` reached the app replaced
+with the real address.
+
+**What I did instead of the obvious thing:** I checked that the removal
+was exact, rather than just deleting the block: `git diff d58fe5f~1 --
+src/server.ts` is empty. I also checked it was gone from the deployed
+build. After the redeploy's `boot` at 16:33 UTC, a `?ipprobe=1` request
+logged nothing. Two `ip_probe` lines did show up in that `flyctl logs`
+read, but they were the 16:27 test replayed from Fly's log buffer.
+
+**How I knew it was right:** CI and deploy green for `386423f`;
+typecheck green; the empty diff above.
+
+**Citation:** `d58fe5f` → `386423f`.
+
+**Curated prompt:** "push" (Part 4 of `docs/step-13-run.md`).
+
+## 2026-11-07 03:51 — [judgement]
+
+**What happened:** The rest of Step 13 Part 4, on production after the
+owner's "push".
+- **Push:** `df8c82b..2d1aabe`, 30 commits. `origin/main` was checked
+  first and had nothing new.
+- **CI** (run 42249456535): 99 passed, 20 skipped, matching the local
+  CI-shaped run. Test 5b ran and passed: "✓ 5b. the test-only route that
+  sets stacks doesn't exist in this build 888ms". Test 37 passed too. The
+  deploy job was green.
+- **Migrations:** production's `schema_migrations` lists 0001–0005 plus
+  `0006_guests.sql` and `0007_solo.sql`. The four solo tables exist.
+- **Live site, signed out, at 1920×1080 and 390×844:**
+  - `/` is 200 and has Play the house;
+  - `/tables/1` lands on `/login?next=/tables/1` with Play as a guest;
+  - no overflow, no console errors; I looked at the screenshots.
+- **Fly-Client-IP:** the proxy overwrites it (entry for `d58fe5f`).
+- **One production guest,** "Alpaca 18" (user 4), made through the real
+  button from an invite link, and **left unclaimed**. The log shows
+  `guest_created`, then `join` and a `stream_connect` snapshot.
+- **Both PROBE accounts log in:** 303 to `/tables/1`.
+- **Run-all Part 1 on production** with `flyctl logs` running:
+  - a–e, h and i pass;
+  - f is partial: table 2's page and stream are 404, but its POST is
+    **400** "No such table." with a stray `broadcast table=2
+    recipients=0`;
+  - Observed, excerpts and the summary are filled in
+    `docs/testing/multi-user-test-report.md`;
+  - both accounts left, and the table is empty with no pending deal.
+- **Latency probe on production:**
+  - delivery: n=20, median 27 ms, p95 31 ms, max 41 ms; 0/20 missed;
+  - stream gaps during actions: median 37 ms, p95 47 ms, max 53 ms;
+  - stream gaps while idle: max 5001 ms, against the 5000 ms heartbeat
+    and a 7500 ms stall threshold;
+  - both accounts left.
+
+**What I did instead of the obvious thing:**
+- **Ran the run-all driver against a local server first,** with stand-in
+  accounts, before pointing it at production. That caught four harness
+  bugs that would otherwise have read as app failures on production:
+  - a syntax error;
+  - JSON bodies to a form route;
+  - a "simultaneous" check where both sides were illegal, so neither
+    applied;
+  - a `leave` that gave up on A before B had folded the hand out.
+- **Showed scenario h can see a restart before restarting production:**
+  locally the pills went Reconnecting → Live in 3.8 s, with the same
+  `handId`. Before the production restart, I checked that only the two
+  PROBE accounts were seated.
+- **Recorded f's 400 as observed, didn't fix it.** It is older than this
+  run: the act route calls `markPresent` before the table check, in place
+  since `a5a7de6`. It touches neither table 1 nor the database, and
+  Part 4 isn't a fixing step. Left for the owner.
+- **Times came from the server's clock, not my wall clock.** Scenario b's
+  first label read "Next hand in 7 s". Fly's timestamps put the deal 6 s
+  after the hand ended; the page counts down on the browser's clock, which
+  was about a second behind. So it went in the report as a client-clock
+  note, not a timing bug.
+- **Corrected two wrong references before they went in:**
+  - the click-vs-timer race is spec test 8, not 7;
+  - ghost-seat tests 1 and 3 cover the away turn and the 5-timeouts
+    stand-up, but nothing covers the 5-minutes-away stand-up, and the
+    report now says so.
+- **A guest that wasn't mine.** Production has user 3, a guest created
+  at 16:19:17 UTC, about six minutes after the first deploy went live and
+  before any guest action of mine. It's most likely the owner or a friend
+  trying the button. Left alone; noted for the owner.
+
+**How I knew it was right:** each scenario's claims are DOM or parsed-JSON
+checks in `/tmp/s13walk/runall.mjs`, matched against the timestamped Fly
+log in the report's excerpts. Scenario h's turn deadline was identical
+before and after the restart (16:48:17.224Z both). The table was empty
+afterwards, checked directly. The report and this log contain no PROBE
+password (grepped by value) and no client IP.
+
+**Not verified:**
+- a real phone or a screen reader;
+- the 5 s away turn, the stand-ups, a click-vs-timer race, and a
+  three-player partial fold, none of which came up in this run;
+- whether user 3 is the owner's.
+
+**Citation:** CI run 42249456535 (test 5b ✓); `2d1aabe` deployed; this
+commit for the report.
+
+**Curated prompt:** "push", then "When Part 4 is done, write the final
+report to …/step-13-final-report.md."
