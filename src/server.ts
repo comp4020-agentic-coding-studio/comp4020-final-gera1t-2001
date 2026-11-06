@@ -176,20 +176,6 @@ app.use("*", async (c, next) => {
   return next();
 });
 
-// TEMPORARY (Step 13 Part 4, owner-approved; removed in the next commit): does
-// Fly's proxy overwrite a Fly-Client-IP header the client sends? Logs what the
-// app receives, only on a request that asks for it with ?ipprobe=1, so no
-// real visitor's address is logged.
-app.use("*", async (c, next) => {
-  if (c.req.query("ipprobe") === "1") {
-    logEvent("ip_probe", {
-      fly_client_ip: c.req.header("Fly-Client-IP") ?? "-",
-      x_forwarded_for: c.req.header("X-Forwarded-For") ?? "-",
-    });
-  }
-  return next();
-});
-
 // Owner decision (4 Nov 2026): guest sessions slide (src/sessions.ts). On any
 // request, before the route runs, so the refreshed cookie goes out on
 // whatever the route answers (a route that then logs out or signs in again

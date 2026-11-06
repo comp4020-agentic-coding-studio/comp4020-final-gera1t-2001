@@ -6,7 +6,10 @@
 // The key is the Fly-Client-IP header when present, else the socket address.
 // On Fly every request comes through Fly's proxy, so the socket address is
 // the proxy's and only the header names the visitor; the header is trusted
-// because the proxy is what sets it. Off Fly (localhost, CI) anyone can send
+// because the proxy is what sets it. Checked on production on 7 Nov 2026
+// (brief 2 Step 13): a request sending its own Fly-Client-IP reached the app
+// with the real address, so the proxy overwrites it and a client can't pick
+// its own budget. Off Fly (localhost, CI) anyone can send
 // the header, which is how the spec gives each test its own budget.
 //
 // An IPv6 address counts by its /64: one home or phone holds a whole /64,

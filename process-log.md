@@ -3014,3 +3014,39 @@ never committed).
 
 **Curated prompt:** "Keep the order in docs/step-13-run.md: backup, then
 the local walk and checks, then stop and wait for my push."
+
+## 2026-11-07 03:21 — [judgement]
+
+**What happened:** Step 13 Part 4 asks whether Fly's proxy overwrites a
+`Fly-Client-IP` header that the client sends; the guest rate limit
+(`server.ts` `clientIp`) trusts it. Fly's docs
+(docs.fly.io/networking/request-headers) don't say. They describe it as
+"The IP address of the client from the perspective of Fly Proxy" and say
+"Request headers are added by Fly Proxy". They say `Fly-Forwarded-Port`
+is "always set by the Fly Proxy", but make no such promise for
+`Fly-Client-IP`. So this needed a real request.
+
+**What I did instead of the obvious thing:**
+- **Asked the owner first.** The other way to test it was through the rate
+  limit itself: 11 guest POSTs to reach the 429, then one with a made-up
+  header. That would have left up to 11 guest accounts on production, with
+  no cleanup job. The owner chose a temporary log line instead: two extra
+  commits and deploys, and no accounts.
+- **The line logs only on `?ipprobe=1`,** so no real visitor's address is
+  logged. Tried locally first: it logs on the probe and stays silent on a
+  plain `/`.
+
+**How I knew it was right:**
+- **CI and deploy green** for `d58fe5f`.
+- **The test:** with `flyctl logs` running, one request carried
+  `Fly-Client-IP: 203.0.113.77` (a documentation-only range) and one sent
+  none. The app received my real address in `fly_client_ip` both times,
+  and that address is also the left entry of `X-Forwarded-For`. So **Fly
+  overwrites a client-sent `Fly-Client-IP`**, and the limit can't be
+  dodged with it. Nothing to fix. The address itself isn't recorded here.
+- **Removed in the next commit,** before anything else.
+
+**Citation:** `d58fe5f` (probe in); its removal is the next commit.
+
+**Curated prompt:** "push" (Part 4 of `docs/step-13-run.md`), then the
+owner's choice: "Temporary log line".
