@@ -2908,3 +2908,109 @@ test 37 fails ("expected HTMLElement{} to be null" on `[data-pot]`); test
 
 **Curated prompt:** "Keep the order in docs/step-13-run.md: backup, then
 the local walk and checks, then stop and wait for my push."
+
+## 2026-11-07 02:55 — [judgement]
+
+**What happened:** Step 13, Parts 1 and 2 of `docs/step-13-run.md`, up to
+the stop before the push.
+- **Part 1, production backup:** taken with better-sqlite3's online
+  `backup()` inside the machine. `backup()` is an `async function`
+  (`lib/methods/backup.js:8`), so `.then` runs once it has finished.
+  Downloaded to `~/house-game-backups/backup-2026-11-07.sqlite3`, a new
+  name; the 4 Nov file is untouched. Mode set to 600: sftp wrote it 644,
+  and it holds password hashes. Integrity check `ok`. Counts: users 2,
+  sessions 10, security_questions 4, seats 0, table_state 1, hand_results
+  16; schema_migrations 5. The copy on the machine was deleted after the
+  local one opened. The machine was stopped (Fly's idle stop), so the first
+  `ssh` said "no started VMs"; one GET to `/` woke it.
+- **Part 2, the fix:** the review's bug, which went red in `a5eb70c`.
+  `shownHand` (`render.js`) now keeps a finished hand on the felt only
+  while one of its players is still seated. It matches the engine's
+  `PublicPlayer.id` (`@pokertools/types` `dist/player.d.ts:27`, `readonly
+  id: string`) against the seated user ids, which are the same thing
+  (`table.ts` `startHand`: `engine.sit(seat.seat_no,
+  String(seat.user_id), …)`). `viewerState` now goes through `shownHand`
+  too, so the seats, prompt and dock can't disagree with the centre.
+- **Part 2, the report:** `docs/testing/multi-user-test-report.md`
+  Expected for (b): a 20 s turn, and a 6 s pause, then `hand_start …
+  by=auto`. (e)'s "not 30 s" is now "not 20 s"; it was stale after
+  Step 10. New scenario (i), and its summary row.
+
+**What I did instead of the obvious thing:**
+- **The owner's first message said "push first".** The run file says to
+  back up before anything is pushed, so I didn't push. The owner then
+  confirmed the run file's order.
+- **I fixed a bug older than this step instead of reporting it and
+  pushing.** Step 13 asks for "no open review finding", and the bug shows
+  a stranger a win they didn't play on the first deploy friends see.
+- **The report's log lines come from a real server log, not the source.**
+  That caught two things the source suggested wrongly:
+  - A fold-out logs `street=SHOWDOWN` too. The engine's
+    `awardPotToLastPlayer` (`dist/actions/betting.js:240`, doc comment at
+    :235: "Award pots to remaining eligible players when hand ends by
+    folds") returns `street: "SHOWDOWN"` (:332). So the report says the
+    logs alone can't tell a fold-out from a showdown, and why.
+  - `hand=` on `hand_start` is always 1: a fresh engine per hand, as Step
+    10 found (this log, 4 Nov). The report tells testers not to count
+    hands by it.
+- **Fixed from the Opus review, all checked against `render.js` first:**
+  - the (i) text said a fold-out winner's cards "stay face down". Once
+    the hand is over, `seatsHtml` draws nothing at that seat, not backs;
+  - "a folded hand is never drawn face up on anyone's page" is now
+    "anyone else's": the folder's dock still shows their own two cards;
+  - (i) now names split pots, `auto_deal_skipped … present=N`, and the
+    extra broadcast a stand-up at hand end sends;
+  - the walk: an ungrouped `|split` alternation that made its prompt
+    check always pass is fixed; overflow is now also measured on page B.
+- **Left for the owner, from the review:** Young Serif's old-style
+  figures make "Pot 10" read as "Pot IO" and "990" as "99o". This is the
+  same thing the `centreHtml` comment notes for "Pot 0". It's a font
+  choice the owner made and is happy with on production, so I haven't
+  changed it.
+
+**How I knew it was right:**
+- **Walk** (`/tmp/s13walk/walk.mjs`, headless Chromium, a fresh server
+  with the shipped timings): 41 DOM checks pass at each of 1920×1080 and
+  390×844, with no console errors and no horizontal overflow. It covers
+  the brief's route in order:
+  - home signed out;
+  - the invite link lands on `/login?next=/tables/1`;
+  - Play as a guest, then Sit, is two taps;
+  - a check-down showdown against a second browser, where each page draws
+    the other's real faces and both say the same result line;
+  - "Next hand in 6 s" ticks to 5, the auto-deal arrives on both pages
+    with no Deal pressed, and the fresh turn clock reads 20s;
+  - a fold-out with neither page showing faces;
+  - claim (live checklist 5/5, display name kept);
+  - solo from Play the house: dealer cards are backs until the fold, and
+    a fold at ante 10 nets −10;
+  - `/results`: Table then Against the house; the claimed player has no
+    guest tag, the unclaimed one has it;
+  - profile, then log out; the guest's Log out goes to the warning page.
+  - I looked at the screenshots.
+- **Deliberate breaks, each restored and checked absent with `grep -c
+  DELIBERATE`:**
+  - `SHOW` dispatch skipped in `tableShowdownHands`: the walk's "A's page
+    draws B's real faces" goes red. Only the winner's hand was drawn.
+  - The old `shownHand` rule put back: only test 37 of 42 in
+    `spec/poker.test.ts` goes red. The walk's new check goes red too,
+    reproducing the bug as "Moose 79 won 10. Everyone else folded." for a
+    guest who had just sat down.
+- **`pnpm check` on the fixed code, fresh DBs:**
+  - hooks on, shipped timings: 116 passed, 3 skipped (5b, the
+    deck-hook-absent test, the guest-window test);
+  - CI-shaped (`NODE_ENV=production`, the app given `TEST_HOOKS=1`, no
+    "hooks are ON"): 99 passed, 20 skipped. 5b and the deck-hook-absent
+    test ran and passed;
+  - the guest-window test, on the pre-fix code, run alone with
+    `GUEST_LIMIT=3 GUEST_LIMIT_WINDOW_MS=3000`: accounts file 41/41.
+- **`pnpm check:evidence`:** green.
+- **Not verified:** production (Part 4 is after the owner's push), a real
+  phone, and a real screen reader.
+
+**Citation:** `a5eb70c` (red) → `a8a9562` (green): test 37 red → green.
+Backup: `~/house-game-backups/backup-2026-11-07.sqlite3` (path only;
+never committed).
+
+**Curated prompt:** "Keep the order in docs/step-13-run.md: backup, then
+the local walk and checks, then stop and wait for my push."
