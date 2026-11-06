@@ -50,7 +50,12 @@ _paste_
 **Expected:** `action_received` → `action_applied` → `broadcast recipients=N`,
 where N is every open table page. Each other screen updates within about a
 second (earlier measurement: 16–54 ms). The countdown and the turn marker
-move to the next player.
+move to the next player; a present player's turn is 20 s (it was 30 s before
+4 Nov). When an action ends the hand (`action_applied … hand_over=true`), the
+result stays on every screen for 6 s with "Next hand in 6 s" counting down,
+then the next hand deals itself if two seated players are present:
+`hand_start … by=auto`, with no `action_received route=start` before it. A
+hand someone deals by pressing the button logs `by=manual`.
 
 **Observed:** _…_
 
@@ -83,7 +88,7 @@ it is. They see no one's hole cards. They can sit down for the next hand
 A seated player closes the tab, waits, then reopens it.
 
 **Expected:** `disconnect`; after 10 s with no stream, `away` and an "Away"
-tag on their seat; if it's their turn, the table waits 5 s, not 30 s, then
+tag on their seat; if it's their turn, the table waits 5 s, not 20 s, then
 auto-checks or folds (`action_applied auto=true`). Reopening within 5 minutes
 logs `join` and `back`; they keep their seat and chips. After 5 timeouts in a
 row, or 5 minutes away, they're stood up when the hand ends
@@ -133,18 +138,55 @@ page. The hand in progress and its turn deadline are restored from
 
 **Observed:** _…_
 
+### i) A showdown: every page shows the same tabled hands
+
+Two or three seated players and one signed-in spectator, each on their own
+page. Play a hand to showdown with nobody folding (check or call down);
+then one where a player folds and the other two reach showdown; then one
+everyone else folds.
+
+**Expected:** at a showdown, every hand still live (not folded) is drawn
+face up on **every** page, seated or spectating, and they are the same
+cards each player sees in their own dock. A folded hand is never drawn
+face up on anyone else's page (the folder still sees their own two cards in
+their dock). A hand won because everyone else folded is not a showdown:
+once it's over, no cards are drawn at the winner's seat on anyone else's
+page, not even backs. Every page shows the same result line: "Hand over.
+*name* won *N* with *hand*." after a showdown, "*A* and *B* split *N* with
+*hand*." for a split pot, or "Hand over. *name* won *N*. Everyone else
+folded.", followed by "Next hand in 6 s".
+
+The logs show one `action_applied … street=SHOWDOWN … hand_over=true`, then
+a `broadcast recipients=N` carrying the tabled hands to every page at once
+(more than one if the hand's end stands someone up: each `stood_up` line
+broadcasts too), and 6 s later `hand_start … by=auto`. If fewer than two
+seated players are present when the 6 s are up, the log shows
+`auto_deal_skipped table=1 present=N` instead and the pages keep showing
+*Deal next hand*. An auto-deal leaves away players out of the new hand
+(`players=` is smaller) without standing them up. A fold-out logs `street=SHOWDOWN`
+too (the engine moves the street there when the hand ends), and the line
+names no winner, so the logs alone can't tell the two apart: a hand-ending
+`type=FOLD` is usually a fold-out, but with three players a fold can also
+close the river and send the other two to showdown. The pages are the
+check: whether the faces are drawn. There is no per-viewer line for the
+showdown: the hands are tabled once, in the stored state, and each page's
+view is cut from it. Note that `hand=` on `hand_start` is always 1 (each
+hand runs on a fresh engine), so count hands by `hand_start` lines, not by
+that number.
+
 ## Summary
 
 | Scenario | Expected | Observed | Pass? |
 |---|---|---|---|
 | a) Two users join | Both see each other, 2 × `join` | | |
-| b) Action propagates | Other screens within ~1 s, `broadcast` | | |
+| b) Action propagates | Other screens within ~1 s, `broadcast`; 20 s turn; next hand deals itself 6 s after the last (`by=auto`) | | |
 | c) Simultaneous actions | One applied, other rejected or lost race | | |
 | d) Late join | Snapshot of current hand, no hidden cards | | |
 | e) Leave and return | Away after 10 s, 5 s turns, seat kept | | |
 | f) Isolated room | 404 for other tables; private cards stay private | | |
 | g) Different machines | Not supported by design (single volume) | Not run | n/a |
 | h) Machine restart | Reconnecting → Live, hand restored | | |
+| i) Showdown for everyone | Same tabled hands on every page; folded hands and a fold-out winner stay hidden | | |
 
 ## Background: what earlier testing found
 

@@ -2885,3 +2885,26 @@ the 24 unpushed commits plus this one, so nothing was deployed.
 
 **Curated prompt:** "Push everything, then read docs/step-13-run.md and
 follow it. Commit that file first, on its own, with a log entry."
+
+## 2026-11-07 02:40 — [routine]
+
+**What happened:** Step 13's red commit. Test 37 in `spec/poker.test.ts`
+(beside test 19, since it plays on table 1): one pair play a hand to a
+fold-out and both leave; a new pair sit down; the table page must show no
+pot, no board cards, no "Hand over", and neither new name.
+
+**What I did instead of the obvious thing:** The bug came from the Opus
+review of Part 2, which found it in my walk's screenshots, not from a test.
+My 48 DOM checks per viewport all passed. In `03-two-seated-1920.png`,
+"Crane 93", who had just sat down with 1,000, was shown as having won the
+previous pair's fold-out. I confirmed it in the screenshot and in
+`render.js` before writing a test for it.
+
+**How I knew it was right:** against a fresh server on the unfixed code,
+test 37 fails ("expected HTMLElement{} to be null" on `[data-pot]`); test
+19 passes.
+
+**Citation:** `a5eb70c`.
+
+**Curated prompt:** "Keep the order in docs/step-13-run.md: backup, then
+the local walk and checks, then stop and wait for my push."

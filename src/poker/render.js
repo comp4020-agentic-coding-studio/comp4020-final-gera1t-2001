@@ -109,7 +109,9 @@ function actionLabel(a) {
 // position in this view, worked out once.
 /** @param {TableView} view */
 function viewerState(view) {
-  const hand = view.hand;
+  // shownHand, not view.hand: seats, prompt and dock agree with the centre
+  // on whether a finished hand is still on the felt.
+  const hand = shownHand(view);
   const running = hand !== null && hand.winners === null;
   const mySeat = view.seats.find((s) => s.userId === view.you) ?? null;
   const me = mySeat && hand ? (hand.players[mySeat.seatNo] ?? null) : null;
@@ -242,13 +244,18 @@ function streetLabel(hand) {
 }
 
 // The hand to show. A finished hand stays on the felt so players see how it
-// ended, but once everyone has stood up it belongs to nobody at the table,
-// so a newcomer sees an empty table rather than strangers' last showdown.
+// ended, but only while someone who played it is still seated. Once they
+// have all stood up it belongs to nobody at the table: a newcomer sees an
+// empty table rather than strangers' last showdown, and a new pair who sit
+// down aren't shown its pot, nor, through winnersText's seat lookup,
+// credited with winning it. The engine's player id is the user id
+// (table.ts startHand, engine.sit(String(seat.user_id), …)).
 /** @param {TableView} view */
 function shownHand(view) {
   const hand = view.hand;
-  if (hand && hand.winners !== null && view.seats.length === 0) return null;
-  return hand;
+  if (!hand || hand.winners === null) return hand;
+  const seatedIds = new Set(view.seats.map((s) => String(s.userId)));
+  return hand.players.some((p) => p !== null && seatedIds.has(p.id)) ? hand : null;
 }
 
 // The engine's winners[].handRank is the evaluator's category name and
@@ -360,7 +367,7 @@ function promptHtml(view, now) {
   const { hand, running, myTurn } = viewerState(view);
   const clock = turnClock(view, now);
   const clockHtml = clock ? `<span class="clock" data-clock>${clock.seconds}s</span>` : "";
-  if (!hand || !shownHand(view)) return view.seats.length < 2 ? "Waiting for players. Two seated can deal." : "No hand yet. Deal when ready.";
+  if (!hand) return view.seats.length < 2 ? "Waiting for players. Two seated can deal." : "No hand yet. Deal when ready.";
   if (!running) {
     const next = nextHandLabel(view, now);
     return winnersText(view) + (next ? ` <span class="next-hand" data-next-hand>${next}</span>` : "");
