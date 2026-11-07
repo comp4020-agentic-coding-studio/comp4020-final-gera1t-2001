@@ -454,6 +454,13 @@ function notifyTable(tableId: number): void {
   }
 }
 
+// Brief 2 Step 13 (owner decision): the routes ask this before anything else,
+// so a request to a table that doesn't exist is a 404 that records nothing:
+// no presence entry, no broadcast.
+export function tableExists(tableId: number): boolean {
+  return getTable(tableId) !== undefined;
+}
+
 function getTable(tableId: number): PokerTable | undefined {
   return db.prepare("SELECT * FROM poker_tables WHERE id = ?").get(tableId) as PokerTable | undefined;
 }

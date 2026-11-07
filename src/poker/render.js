@@ -216,7 +216,9 @@ function seatsHtml(view, now) {
 function centreHtml(view) {
   const hand = shownHand(view);
   if (!hand) {
-    // No pot line before a hand: "Pot 0" in Young Serif reads as "Pot O".
+    // No pot line before a hand: a pot of 0 tells nobody anything. (It was
+    // first left out because "Pot 0" in Young Serif read as "Pot O"; numbers
+    // have been in the sans since brief 2 Step 13.)
     return `<div class="center"><div class="street">No hand yet</div><div class="board">${SLOT_CARD.repeat(5)}</div></div>`;
   }
   // Pot = settled pots plus what is in front of players this street, so the

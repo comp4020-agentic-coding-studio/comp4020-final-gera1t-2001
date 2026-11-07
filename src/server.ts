@@ -77,6 +77,7 @@ import {
   sitDown,
   startHand,
   subscribeToTable,
+  tableExists,
 } from "./poker/table.ts";
 import {
   SECURITY_QUESTIONS,
@@ -759,6 +760,27 @@ function tableIdParam(c: Context): number | undefined {
   return Number.isInteger(id) ? id : undefined;
 }
 
+// Brief 2 Step 13 (owner decision): every /tables/:id route answers 404 for a
+// table that doesn't exist, before it reads a session, marks anyone present
+// or broadcasts. Here rather than in each route so none can forget. The
+// redirect to log in for a signed-out visitor is kept for real tables only;
+// a missing one is 404 for everyone.
+app.use("/tables/:id/*", async (c, next) => {
+  const tableId = tableIdParam(c);
+  if (tableId === undefined || !tableExists(tableId)) return c.notFound();
+  return next();
+});
+app.use("/tables/:id", async (c, next) => {
+  const tableId = tableIdParam(c);
+  if (tableId === undefined || !tableExists(tableId)) return c.notFound();
+  return next();
+});
+
+// Multi-user testing with Fly logs: every poker POST is logged when it
+// arrives ("action_received") and, if the server turns it down, again with
+// the status and the reason it gave ("action_rejected"). One place, so no
+// route can forget. The body was already parsed by the route, and Hono
+// caches it, so reading it here costs nothing extra.
 app.use("/tables/:id/:route{sit|leave|start|act}", async (c, next) => {
   if (c.req.method !== "POST") return next();
   const user = currentUser(c);

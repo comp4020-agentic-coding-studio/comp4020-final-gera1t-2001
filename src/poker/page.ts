@@ -422,7 +422,10 @@ export const CARD_STYLE = `  .card {
     position: relative; display: grid; place-items: center; font-family: var(--serif);
   }
   .card.red { color: var(--red); }
-  .card .idx { position: absolute; left: 12%; top: 6%; line-height: .95; text-align: center; font-size: calc(var(--w) * .34); }
+  /* Brief 2 Step 13 (owner decision): every number on the table, solo and
+     results pages is in the sans. Young Serif's old-style figures made a 10
+     read as "IO" and 990 as "99o". The suit pip keeps the serif. */
+  .card .idx { position: absolute; left: 12%; top: 6%; line-height: .95; text-align: center; font-size: calc(var(--w) * .34); font-family: var(--sans); font-weight: 700; }
   .card .idx span { display: block; font-size: .8em; }
   .card .pip { font-size: calc(var(--w) * .62); margin-top: 18%; }
   .card.slot { background: transparent; box-shadow: none; border: 2px dashed rgba(255,255,255,.18); }
@@ -451,7 +454,7 @@ export const DOCK_STYLE = `  /* The dock */
   .dock:has(.mine:empty) > * { grid-column: 1 / -1; }
   .watching { margin: 0; color: var(--muted); }
   .prompt { font-size: 1.05rem; margin: 0; }
-  .prompt strong { font-family: var(--serif); font-weight: 400; font-size: 1.25rem; }
+  .prompt strong { font-family: var(--sans); font-weight: 700; font-size: 1.25rem; }
   .prompt .clock { color: var(--brass); font-weight: 700; margin-left: .35rem; }
   .prompt .clock-plain { font-weight: 700; }
   /* Its own line on a phone. The space before it stays in the text, for
@@ -500,7 +503,7 @@ export const TABLE_STYLE = `
     display: grid; justify-items: center; gap: .6rem; text-align: center;
   }
   .pot { font: 1.05rem var(--sans); color: #e9f3ee; }
-  .pot strong { font: 1.6rem/1 var(--serif); color: #fff; margin-left: .35rem; font-weight: 400; }
+  .pot strong { font: 700 1.6rem/1 var(--sans); color: #fff; margin-left: .35rem; }
   .street { font-size: .85rem; color: #bfe0d1; }
   .board { display: flex; gap: .45rem; }
 

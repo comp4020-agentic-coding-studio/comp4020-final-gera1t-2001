@@ -3158,3 +3158,40 @@ commit for the report.
 
 **Curated prompt:** "push", then "When Part 4 is done, write the final
 report to …/step-13-final-report.md."
+
+## 2026-11-07 11:33 — [routine]
+
+**What happened:** The red commit for the owner's scenario-f decision: a
+request to a table that doesn't exist answers 404 on every table route,
+and marks no presence and broadcasts nothing. Test 38 checks the 404 on
+all eight table routes for table 2. Test 39 reads the missing table's
+in-memory state before and after, through a new read-only test hook,
+`GET /test-hooks/tables/:id/live` (`liveStateForTest`: broadcast seq and
+the number of users with presence). 5b now also checks that the hook is
+absent in production.
+
+**What I did instead of the obvious thing:**
+- **Built a sensor for the in-memory state instead of asserting from
+  logs.** The spec can't read server logs, and "no broadcast" is about
+  memory. The hook follows the existing pattern: behind `TEST_HOOKS`,
+  never mounted under `NODE_ENV=production`, and shown absent by 5b.
+- **Added the hook in the red commit,** so test 39 goes red on the
+  behaviour, not on a missing route.
+- **Traced which field moves before trusting the test.** Per POST:
+  presence goes 0 → 1 on the first one, every time. The broadcast
+  (`seq`) happens only when the poster counts as away at the missing
+  table. `awaySince` treats everyone as present for `BOOT_GRACE_MS` after
+  a boot, so a fresh test server never broadcasts, while production, long
+  booted, did (`seq` → 1, as its log showed). On a fresh server test 39
+  goes red on presence, and on a long-running one on `seq` too. It
+  asserts both.
+
+**How I knew it was right:** on the committed code, with hooks on, only
+38 and 39 fail out of 44: 38 on "GET /tables/2/results: expected 400 to
+be 404", 39 on presence.
+
+**Citation:** `56bff66`.
+
+**Curated prompt:** "Scenario f: a POST to a nonexistent table answers
+404 and does not mark presence or broadcast, on every table route; red
+test first; keep the report's Expected."

@@ -112,9 +112,9 @@ ${DOCK_STYLE}
   .solo-dock > * { grid-column: 1 / -1; }
   .solo-dock .actions { grid-column: 1 / -1; }
   .solo-money { display: flex; gap: 1.5rem; flex-wrap: wrap; margin: 0; color: var(--muted); }
-  .solo-money strong { color: var(--text); font: 1.25rem var(--serif); font-weight: 400; margin-left: .35rem; }
+  .solo-money strong { color: var(--text); font: 700 1.25rem var(--sans); margin-left: .35rem; }
   .solo-money strong.neg { color: #f0857e; }
-  .solo-result { margin: 0; font: 1.2rem var(--serif); }
+  .solo-result { margin: 0; font: 700 1.2rem var(--sans); }
   .solo-result.pos { color: var(--brass); }
   .solo-result.neg { color: #f0857e; }
   .solo-notice { margin: 0; padding: .6rem .9rem; border-radius: .6rem; background: var(--card); color: var(--ink); font-weight: 600; }
