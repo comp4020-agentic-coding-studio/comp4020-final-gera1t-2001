@@ -628,6 +628,15 @@ export function leave(tableId: number, userId: number): void {
   schedulePresenceCheck(tableId);
 }
 
+// Test-only (brief 2 Step 13, owner decision): what this process holds in
+// memory for a table id, whether or not the table exists: its broadcast seq
+// and how many users it has a presence entry for. Read by
+// /test-hooks/tables/:id/live, which is mounted only outside production.
+// It lets the spec show a request to a missing table recorded nothing.
+export function liveStateForTest(tableId: number): { seq: number; presentUsers: number } {
+  return { seq: currentSeq(tableId), presentUsers: presenceByTable.get(tableId)?.size ?? 0 };
+}
+
 // Test-only (brief 2 step 10b): sets seated stacks between hands, so a test
 // can reach states real play takes dozens of hands to reach (both blinds all
 // in). Only src/server.ts's /test-hooks route calls it, and that route is

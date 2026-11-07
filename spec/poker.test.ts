@@ -527,6 +527,10 @@ describe.skipIf(!isLocal)("poker (writes test data — local only)", () => {
         body: "{}",
       });
       expect(session.status).toBe(404);
+      // And the table-state read (Step 13 owner decision): a GET that a
+      // mounted route would answer 200.
+      const state = await fetch(new URL(`/test-hooks/tables/${TABLE_ID}/live`, baseUrl), { headers: { cookie: alice.cookie } });
+      expect(state.status).toBe(404);
     },
   );
 
@@ -1213,6 +1217,59 @@ describe.skipIf(!isLocal)("table page (writes test data — local only)", () => 
     expect(doc.querySelector(".said")).toBeNull();
     expect(doc.querySelector("[data-pot]")).toBeNull();
   });
+
+  // Step 13 owner decision: a table that doesn't exist is 404 on every table
+  // route, GET or POST, and nothing about it is recorded first. Before, the
+  // POSTs marked the poster present at the missing table (which broadcast to
+  // nobody) and answered 400 "No such table."; /results answered 400 too.
+  const MISSING_TABLE = 2;
+  const missingTableRoutes: { method: "GET" | "POST"; path: string }[] = [
+    { method: "GET", path: `/tables/${MISSING_TABLE}` },
+    { method: "GET", path: `/tables/${MISSING_TABLE}/view` },
+    { method: "GET", path: `/tables/${MISSING_TABLE}/results` },
+    { method: "GET", path: `/tables/${MISSING_TABLE}/events` },
+    { method: "POST", path: `/tables/${MISSING_TABLE}/sit` },
+    { method: "POST", path: `/tables/${MISSING_TABLE}/leave` },
+    { method: "POST", path: `/tables/${MISSING_TABLE}/start` },
+    { method: "POST", path: `/tables/${MISSING_TABLE}/act` },
+  ];
+  async function hitMissingTable(cookie: string, route: { method: string; path: string }): Promise<number> {
+    const res = await fetch(new URL(route.path, baseUrl), {
+      method: route.method,
+      headers: { cookie },
+      body: route.method === "POST" ? new URLSearchParams({ type: "check" }) : undefined,
+      redirect: "manual",
+    });
+    await res.body?.cancel();
+    return res.status;
+  }
+
+  it("38. every table route answers 404 for a table that doesn't exist", async () => {
+    const alice = await registerAndSit();
+    players = [alice];
+    const statuses = Object.fromEntries(
+      await Promise.all(missingTableRoutes.map(async (r) => [`${r.method} ${r.path}`, await hitMissingTable(alice.cookie, r)])),
+    );
+    for (const route of missingTableRoutes) expect(statuses[`${route.method} ${route.path}`], `${route.method} ${route.path}`).toBe(404);
+  });
+
+  it.skipIf(process.env.TEST_HOOKS !== "1")(
+    "39. a request to a missing table marks no one present there and broadcasts nothing",
+    async () => {
+      const alice = await registerAndSit();
+      players = [alice];
+      const live = async (tableId: number) =>
+        (await (await fetch(new URL(`/test-hooks/tables/${tableId}/live`, baseUrl), { headers: { cookie: alice.cookie } })).json()) as {
+          seq: number;
+          presentUsers: number;
+        };
+      const before = await live(MISSING_TABLE);
+      for (const route of missingTableRoutes) await hitMissingTable(alice.cookie, route);
+      const after = await live(MISSING_TABLE);
+      expect(after.presentUsers).toBe(before.presentUsers);
+      expect(after.seq).toBe(before.seq);
+    },
+  );
 
   // Step 13 review: test 19 covers an emptied table; the last hand also
   // showed again as soon as someone new sat down, crediting its pot to

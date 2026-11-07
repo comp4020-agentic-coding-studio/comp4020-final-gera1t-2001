@@ -70,6 +70,7 @@ import {
   currentSeq,
   getHandResults,
   leave,
+  liveStateForTest,
   markPresent,
   restoreSchedulersOnBoot,
   setStacksForTest,
@@ -758,11 +759,6 @@ function tableIdParam(c: Context): number | undefined {
   return Number.isInteger(id) ? id : undefined;
 }
 
-// Multi-user testing with Fly logs: every poker POST is logged when it
-// arrives ("action_received") and, if the server turns it down, again with
-// the status and the reason it gave ("action_rejected"). One place, so no
-// route can forget. The body was already parsed by the route, and Hono
-// caches it, so reading it here costs nothing extra.
 app.use("/tables/:id/:route{sit|leave|start|act}", async (c, next) => {
   if (c.req.method !== "POST") return next();
   const user = currentUser(c);
@@ -1095,6 +1091,14 @@ if (TEST_HOOKS_ENABLED) {
       return c.json({ error: err instanceof PokerError ? err.message : "Bad request." }, 400);
     }
     return c.json({ ok: true });
+  });
+  // Brief 2 Step 13: what the process holds in memory for a table id
+  // (broadcast seq, users with presence), existing table or not, so the spec
+  // can show a request to a missing table recorded nothing. Read-only.
+  app.get("/test-hooks/tables/:id/live", (c) => {
+    const tableId = tableIdParam(c);
+    if (tableId === undefined) return c.notFound();
+    return c.json(liveStateForTest(tableId));
   });
   // Brief 2 Step 12: the next solo deal for the signed-in user uses this deck
   // order ({"deck": ["As", ...]}: 52 distinct cards) instead of a shuffle,
