@@ -3196,7 +3196,7 @@ be 404", 39 on presence.
 404 and does not mark presence or broadcast, on every table route; red
 test first; keep the report's Expected."
 
-## 2026-11-07 11:44 — [judgement]
+## 2026-11-07 11:43 — [judgement]
 
 **What happened:** The two owner decisions after Step 13.
 - **(1) A missing table is a 404 that records nothing.** One middleware
@@ -3267,3 +3267,31 @@ test first; keep the report's Expected."
 first. Digits: every number on the table, solo and results pages uses
 the sans font; check at both viewports. Then push together with
 5dc96f1, confirm CI and the deploy."
+
+## 2026-11-07 11:58 — [routine]
+
+**What happened:** `5380df9` put the count in Results' "Last 20 hands"
+heading into the sans. It was the one number the owner's digits decision
+still left in Young Serif after `852a82a`. Also corrected `852a82a`'s log
+time, from 11:44 to 11:43, its real commit time.
+
+**What I did instead of the obvious thing:** I didn't switch the whole
+heading to the sans. Only the figure is wrapped in `.fig`, so the
+heading's words stay in the serif like every other heading. One
+`recentHeading` helper builds the heading for both the table's list and
+the house's, which used to be two copies.
+
+**How I knew it was right:**
+- CI run 42321393726: 100 passed, 21 skipped; 5b ran and passed; deploy
+  green.
+- The digits sensor, read-only on production at 1920×1080 and 390×844:
+  every number on `/tables/1`, `/solo` and `/results`, 85 and 80 on
+  results, renders in Atkinson Hyperlegible Next and none in Young
+  Serif.
+- Locally it was red on `852a82a` and green with the fix, after 20 solo
+  hands made the heading appear.
+
+**Citation:** `5380df9`; CI run 42321393726.
+
+**Curated prompt:** "Digits: every number on the table, solo and results
+pages uses the sans font, not Young Serif; check at both viewports."
