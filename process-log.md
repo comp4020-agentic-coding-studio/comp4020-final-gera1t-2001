@@ -3195,3 +3195,75 @@ be 404", 39 on presence.
 **Curated prompt:** "Scenario f: a POST to a nonexistent table answers
 404 and does not mark presence or broadcast, on every table route; red
 test first; keep the report's Expected."
+
+## 2026-11-07 11:44 — [judgement]
+
+**What happened:** The two owner decisions after Step 13.
+- **(1) A missing table is a 404 that records nothing.** One middleware
+  pair in `src/server.ts` (`/tables/:id` and `/tables/:id/*`) checks
+  `tableExists` (`src/poker/table.ts`) before anything else runs: the
+  session, the `action_received` logger, `markPresent`, or a broadcast.
+  The report's Expected for (f) is unchanged.
+- **(2) Numbers in the sans.** On the table, solo and results pages,
+  these moved from `--serif` to `--sans`:
+  - card rank indices (`.card .idx`; the suit pip keeps the serif);
+  - `.pot strong` and `.prompt strong` (solo's ante sits in one);
+  - `.solo-money strong` and `.solo-result`.
+  Avatars, headings, the identity banner and the login fan keep Young
+  Serif. Results was already sans.
+
+**What I did instead of the obvious thing:**
+- **One middleware, not a check in each route.** It runs before the
+  logger and records nothing for a missing table. Every table route used
+  to do its own check, and the four POSTs ran `markPresent` before theirs.
+- **A signed-out visitor to a missing table now gets 404, not a redirect
+  to log in.** That's the owner's "every table route". A real table
+  still redirects (303; checked on production).
+- **Asked the browser which font renders, rather than reading
+  `font-family`.** The digits sensor (`/tmp/s13walk/digits.mjs`) walks
+  every visible text node with a digit and takes the first family in its
+  stack that `document.fonts.check` says is loaded. The computed
+  `font-family` is a list of fallbacks, not proof of what's drawn.
+- **Showed the sensor responds before trusting its green.** On the old
+  CSS it went red on exactly the pot, the card ranks, and solo's stack
+  and net, while results stayed green. Then green on the new CSS at both
+  viewports.
+- **Updated `render.js`'s "Pot 0" comment.** Its stated reason (Young
+  Serif) is no longer true. The behaviour, no pot line before a hand,
+  isn't changed.
+
+**How I knew it was right:**
+- **(1):**
+  - With the middleware removed, only 38 and 39 go red, 41 pass;
+    restored and checked with `cmp`.
+  - The local server log has 0 lines whose `table=` is 2. An earlier
+    count of 18 was `clients_in_table=2` on table 1 lines; I matched the
+    real field instead.
+  - **On production:** all 8 table routes are 404 for table 2, `flyctl
+    logs` showed 0 table-2 lines, a signed-out `/tables/1` is 303, and
+    the test hook is 404.
+- **(2):** the sensor is green locally at 1920×1080 and 390×844, and I
+  looked at the screenshots. The sans draws zero with a slash ("990").
+- **CI for `852a82a`** (run 42319947440): 100 passed, 21 skipped; 5b ran
+  and passed; deploy green.
+- **What the live check caught: `852a82a` was not complete for (2).**
+  - **What:** the same sensor run read-only on production found "Last
+    20 hands", a `/results` heading that sets its 20 in Young Serif.
+  - **Why the local run missed it:** with fewer than 20 hands the heading
+    reads "Hands so far".
+  - **Fix, in this commit:**
+    - one `recentHeading` helper replaces the two copies of the heading
+      text;
+    - the count goes in a `.fig` span set in the sans; the heading's
+      words keep the serif;
+    - the sensor now plays 20 solo hands first.
+  - **Checked:** red on `852a82a` ("Last 20 hands" in Young Serif), green
+    with the fix at both viewports.
+
+**Citation:** `56bff66` (red) → `852a82a`: 38 and 39 red → green; CI run
+42319947440. The heading fix is the next commit.
+
+**Curated prompt:** "Scenario f: … 404 … on every table route; red test
+first. Digits: every number on the table, solo and results pages uses
+the sans font; check at both viewports. Then push together with
+5dc96f1, confirm CI and the deploy."

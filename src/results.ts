@@ -20,6 +20,13 @@ export interface RecentHand {
 // How many finished hands the page lists.
 export const RECENT_HANDS = 20;
 
+// The recent-hands heading, for the table's list and the house's. Brief 2
+// Step 13 (owner decision): numbers are in the sans, so the count gets
+// .fig while the heading's words keep the serif.
+function recentHeading(count: number): string {
+  return count < RECENT_HANDS ? "Hands so far" : `Last <span class="fig">${RECENT_HANDS}</span> hands`;
+}
+
 // Per player: hands played and net chips over every hand they were dealt
 // into, best first. A user with no rows isn't listed.
 export function ledger(tableId: number): LedgerRow[] {
@@ -119,7 +126,7 @@ function houseSection(youId: number): string {
       </table>`
     : `<p>No one has played the house yet.</p>`;
   const recentHtml = recent.length
-    ? `<h3>${recent.length < RECENT_HANDS ? "Hands so far" : `Last ${RECENT_HANDS} hands`}</h3>
+    ? `<h3>${recentHeading(recent.length)}</h3>
       <table class="ledger" id="house-recent">
         <caption class="visually-hidden">The last ${recent.length} ${recent.length === 1 ? "hand" : "hands"} against the house, newest first</caption>
         <thead><tr><th scope="col">Ended</th><th scope="col">Player</th><th scope="col">Result</th><th scope="col" class="num">Net</th></tr></thead>
@@ -179,7 +186,7 @@ export function resultsPage(tableId: number, youId: number): string {
       <p class="lede-room">Play chips only. Nothing here is money. The table and the house are kept apart; their nets are never added together.</p>
       <h2>Table</h2>
       ${ledgerHtml}
-      ${hands.length ? `<h3>${hands.length < RECENT_HANDS ? "Hands so far" : `Last ${RECENT_HANDS} hands`}</h3>${handsHtml}` : ""}
+      ${hands.length ? `<h3>${recentHeading(hands.length)}</h3>${handsHtml}` : ""}
       ${houseSection(youId)}
     </main>
     <script>

@@ -240,6 +240,9 @@ select { text-overflow: ellipsis; }
 .ledger th, .ledger td { text-align: left; padding: .5rem .6rem; border: 0; border-bottom: 1px solid var(--line); vertical-align: top; }
 .ledger thead th { color: var(--muted); font-weight: 600; font-size: .9rem; }
 .ledger .num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+/* Brief 2 Step 13 (owner decision): a number inside a serif heading is set
+   in the sans, like every other number on these pages. */
+.fig { font-family: var(--sans); font-weight: 700; }
 .ledger .neg { color: #f0857e; } /* --red lifted for contrast on the room */
 .ledger tr.you th { color: var(--brass); }
 /* An unclaimed guest's tag on Results. */
