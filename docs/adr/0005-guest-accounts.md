@@ -2,8 +2,8 @@
 
 ## Status
 
-Proposed. The Decision section is the owner's. Number 0004 is reserved for
-the ghost-seat ADR the owner still owes.
+Accepted (owner, 7 Nov 2026). Built in Step 11 of brief 2; the Decision
+below is the owner's.
 
 ## Context
 
@@ -74,7 +74,21 @@ Step 11:
 
 ## Decision
 
-*(The owner's to write.)*
+B, guests with a claim path.
+
+A friend who opens the link at a home game should be at the table in one
+tap. They should not have to fill in a password with five rules and two
+security questions before they see a single card. But I did not want to give
+up my C8 decision: every account with a password can still be recovered with
+its questions. B keeps that for everyone who registers or claims. Only a
+guest who never claims goes without recovery, and the app tells them so
+before they log out. C would weaken recovery for everyone, and D would give
+up history on Results and let anyone the link reaches take a seat.
+
+Two details are my decisions too (4 Nov 2026). A guest is named after an
+animal, like "Wombat 27", so two guests at one table can be told apart by
+their avatars. And a guest session slides, so a friend who plays every week
+doesn't lose the account at day 30 ([`bccbc3b`](https://github.com/comp4020-agentic-coding-studio/comp4020-final-gera1t-2001/commit/bccbc3b)).
 
 ## Consequences
 
@@ -123,9 +137,10 @@ What B costs, against what it buys:
 - **The rate limit trusts `Fly-Client-IP`.** On Fly the proxy sets it. Off
   Fly (localhost, CI), any client can set it, which is how the spec gives
   each test its own budget. If the app ever ran somewhere without Fly's
-  proxy in front, the limit would be trivial to step around. That Fly's
-  proxy replaces a header the client sent is assumed here, not yet checked
-  against the deployed app.
+  proxy in front, the limit would be trivial to step around. On production,
+  Fly's proxy does replace a `Fly-Client-IP` the client sends: checked on
+  7 Nov with a temporary log line ([`d58fe5f`](https://github.com/comp4020-agentic-coding-studio/comp4020-final-gera1t-2001/commit/d58fe5f), removed in
+  [`386423f`](https://github.com/comp4020-agentic-coding-studio/comp4020-final-gera1t-2001/commit/386423f)).
 - **Claiming reuses registration**, so the two can't drift apart: the same
   rules, messages and field mapping (`registerErrors`, `MESSAGES`) and the
   same fieldsets in `src/account-pages.ts`.

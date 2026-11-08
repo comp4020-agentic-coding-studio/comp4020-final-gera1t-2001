@@ -9,6 +9,38 @@ where it lives --- `fly.toml`, the `Dockerfile`, the CI workflow and
 [final project brief](https://comp.anu.edu.au/courses/comp4020-agentic-coding-studio/assessments/final-project/).
 What the agent needs to carry from any of it is your call.
 
+## House Game: what good means, as rules
+
+These come from the definition of good in `README.md`. Each names what
+protects it. They are owner decisions: don't relax one to make a change
+easier, and if a change seems to need it, stop and ask.
+
+1. **No opponent's hole cards before showdown.** Masking happens only in
+   `engine.view()`; never add a second masking path. At a showdown every
+   viewer gets the same hands, and folded hands are never sent
+   (`spec/poker.test.ts` tests 2, 20–22).
+2. **Chips are fixed and stay where they are.** The table's total never
+   changes during a hand, sitting down always gives the fixed buy-in, and
+   there is no route that adds, buys or transfers chips. Solo chips and table
+   chips never move between each other (tests 3, 5, 36; `spec/solo.test.ts`).
+3. **Nobody is stood up mid-hand.** Stand-ups happen when a hand ends or
+   between hands (ADR 0004; the ghost-seat tests).
+4. **The numbers are mine.** The 20 s turn, the 6 s pause before the next
+   hand, the 10 s away grace, the 5 s away turn, and the stand-up after 5
+   timeouts or 5 minutes are named constants in `src/poker/live.ts`. Don't
+   change one without my say-so.
+5. **The engine's defaults are not this game's rules.** A claim about what
+   `@pokertools/engine` or `@pokertools/evaluator` does is quoted from the
+   file and lines in `node_modules` that decide it. "The engine does this" is
+   not a reason to keep a behaviour.
+6. **Every test that touches table 1 goes in `spec/poker.test.ts`.** Vitest
+   runs files in parallel; a second file on table 1 turned 13 tests red on
+   22 Oct.
+7. **Green is not done.** A change to a page is checked in a real browser at
+   1920×1080 and 390×844, and the screenshots are looked at.
+8. **Mine to write:** `README.md`, `PROCESS.md`, `reflections/`, and every
+   ADR's Decision. Every push to `main` deploys, so push only when I say so.
+
 ---
 
 Everything below this line is carried forward by hand from

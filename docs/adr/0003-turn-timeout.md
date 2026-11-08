@@ -23,6 +23,13 @@ C, with a 30-second countdown (`TURN_TIMEOUT_SECONDS`, a named constant).
 
 I think C is best because this is the rule used in mainstream poker games.
 
+**Update, 4 Nov 2026:** the countdown is now 20 seconds. At a table of
+friends, 30 seconds felt long. A player who has left the page gets 5
+seconds instead ([ADR 0004](0004-ghost-seats.md)). The rule itself (check if
+you can, otherwise fold) is unchanged. Test 27 checks the turn length against
+`TURN_TIMEOUT_SECONDS`
+([`5ce1305`](https://github.com/comp4020-agentic-coding-studio/comp4020-final-gera1t-2001/commit/5ce1305)).
+
 ## Consequences
 
 C costs more than A or B. First, we need a timer. Second, when the timer
